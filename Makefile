@@ -21,7 +21,8 @@ CFLAGS := \
 	-fno-pic \
 	-fno-pie \
 	-fno-asynchronous-unwind-tables \
-	-fno-unwind-tables
+	-fno-unwind-tables \
+	-Iinclude
 
 LDFLAGS := \
 	-T linker.ld \
@@ -30,7 +31,7 @@ LDFLAGS := \
 	-z max-page-size=0x1000 \
 	-Map=$(MAP)
 
-OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/main.o $(BUILD_DIR)/uart.o
+OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/uart.o
 
 .PHONY: build run clean
 
@@ -43,6 +44,9 @@ $(BUILD_DIR)/boot.o: arch/aarch64/boot.S | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/main.o: kernel/main.c | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/console.o: kernel/console.c include/nimera/console.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/uart.o: platform/qemu-virt/uart.c | $(BUILD_DIR)/.dir

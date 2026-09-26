@@ -19,6 +19,7 @@ The current milestone successfully:
 - loads that ELF directly with QEMU's generic loader;
 - establishes a private initial stack;
 - enters `kernel_main()`;
+- routes kernel I/O through a minimal platform-independent console API;
 - writes `Hello from kernel` through QEMU `virt`'s PL011 UART; and
 - enables polling UART input and echoes each received character.
 
@@ -45,9 +46,11 @@ The entry point is `_start` in `arch/aarch64/boot.S`:
 1. `_start` computes the linker-defined `__stack_top` address.
 2. It moves that address into the AArch64 stack pointer, `sp`.
 3. It calls `kernel_main()` in `kernel/main.c`.
-4. `kernel_main()` sends the string to `platform/qemu-virt/uart.c`.
-5. The UART code writes each output character to the PL011 data register at
-   `0x09000000`.
+4. `kernel_main()` uses `console_write()` and `console_getc()` from the common
+   console layer.
+5. The current console implementation delegates to the QEMU `virt` PL011
+   driver, which writes output to the data register at `0x09000000` and polls
+   input status.
 6. `kernel_main()` prints the echo-mode message, then waits for input by
    polling the PL011 receive FIFO state.
 7. Each received character is sent back through the same UART. Enter is
@@ -65,6 +68,12 @@ Echo mode enabled. Type characters:
 
 After the second line, characters typed into the terminal are echoed one at a
 time. Enter is emitted as `\r\n`.
+
+The common console API is intentionally only three operations:
+`console_putc()`, `console_write()`, and `console_getc()`. It keeps kernel code
+independent of the physical console device; the current implementation is a
+thin delegation layer, not a driver framework or HAL. PL011 registers and
+platform-specific details remain in `platform/qemu-virt/uart.c`.
 
 ## Requirements on macOS Apple Silicon
 
@@ -122,10 +131,14 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 ├── Makefile
 ├── linker.ld
 ├── .gitignore
+├── include/
+│   └── nimera/
+│       └── console.h
 ├── arch/
 │   └── aarch64/
 │       └── boot.S
 ├── kernel/
+│   ├── console.c
 │   └── main.c
 └── platform/
     └── qemu-virt/
@@ -134,12 +147,16 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 
 - `arch/aarch64/boot.S` — the only assembly file; installs the initial stack,
   calls C, and provides the fallback loop if C returns.
-- `kernel/main.c` — defines `kernel_main()` and the minimal polling echo loop.
+- `include/nimera/console.h` — the small platform-independent console API.
+- `kernel/console.c` — delegates the common console API to the current UART
+  implementation.
+- `kernel/main.c` — defines `kernel_main()` and the minimal polling echo loop;
+  it does not call UART functions directly.
 - `platform/qemu-virt/uart.c` — minimal PL011 MMIO input and output for QEMU
   `virt`.
 - `linker.ld` — defines `_start`, the fixed image address, ELF sections, and a
   16 KiB private stack in `NOLOAD` `.bss`.
-- `Makefile` — builds three object files and links them directly with LLD;
+- `Makefile` — builds four object files and links them directly with LLD;
   provides `build`, `run`, and `clean`.
 - `README.md` — project status, workflow, and design notes.
 
@@ -184,8 +201,7 @@ Nimera aims to:
 
 The near-term roadmap is deliberately short:
 
-1. Basic console abstraction
-2. Panic handling
-3. Timer support
-4. Memory discovery and reporting
-5. Minimal interactive shell
+1. Panic handling
+2. Timer support
+3. Memory discovery and reporting
+4. Minimal interactive shell

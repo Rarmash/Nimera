@@ -1,23 +1,21 @@
-// No headers, libc, allocator, or runtime are needed for this milestone.
+// No libc, allocator, or runtime are needed for this milestone.
 
-extern void uart_putc(char c);
-extern char uart_getc(void);
-extern void uart_puts(const char *text);
+#include <nimera/console.h>
 
 void kernel_main(void)
 {
-	uart_puts("Hello from kernel\r\n");
-	uart_puts("Echo mode enabled. Type characters:\r\n");
+	console_write("Hello from kernel\r\n");
+	console_write("Echo mode enabled. Type characters:\r\n");
 
 	for (;;) {
-		char c = uart_getc();
+		char c = console_getc();
 
 		// Terminals commonly send CR for Enter, while some send LF. Normalize
 		// either form to CRLF so the serial terminal starts a clean new line.
 		if (c == '\r' || c == '\n') {
-			uart_puts("\r\n");
+			console_write("\r\n");
 		} else {
-			uart_putc(c);
+			console_putc(c);
 		}
 	}
 }
