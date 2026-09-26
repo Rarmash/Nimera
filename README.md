@@ -20,7 +20,7 @@ The current milestone successfully:
 - establishes a private initial stack;
 - enters `kernel_main()`;
 - writes `Hello from kernel` through QEMU `virt`'s PL011 UART; and
-- remains in a safe `wfe` idle loop.
+- enables polling UART input and echoes each received character.
 
 There is currently no libc, allocator, interrupt subsystem, scheduler,
 filesystem, userspace, or other larger OS subsystem.
@@ -46,17 +46,25 @@ The entry point is `_start` in `arch/aarch64/boot.S`:
 2. It moves that address into the AArch64 stack pointer, `sp`.
 3. It calls `kernel_main()` in `kernel/main.c`.
 4. `kernel_main()` sends the string to `platform/qemu-virt/uart.c`.
-5. The UART code writes each character to the PL011 data register at
+5. The UART code writes each output character to the PL011 data register at
    `0x09000000`.
-6. `kernel_main()` enters an infinite `wfe` loop. If it ever returned, the
-   fallback loop in `boot.S` would also wait safely instead of falling through
-   into arbitrary memory.
+6. `kernel_main()` prints the echo-mode message, then waits for input by
+   polling the PL011 receive FIFO state.
+7. Each received character is sent back through the same UART. Enter is
+   normalized to `\r\n` for a clean terminal line.
+
+The input path is intentionally polling-based. It has no interrupts, ring
+buffer, line editor, shell, or command handling.
 
 The terminal output is:
 
 ```text
 Hello from kernel
+Echo mode enabled. Type characters:
 ```
+
+After the second line, characters typed into the terminal are echoed one at a
+time. Enter is emitted as `\r\n`.
 
 ## Requirements on macOS Apple Silicon
 
@@ -125,9 +133,10 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 ```
 
 - `arch/aarch64/boot.S` — the only assembly file; installs the initial stack,
-  calls C, and provides the fallback idle loop.
-- `kernel/main.c` — defines `kernel_main()` and the main safe idle loop.
-- `platform/qemu-virt/uart.c` — minimal PL011 MMIO output for QEMU `virt`.
+  calls C, and provides the fallback loop if C returns.
+- `kernel/main.c` — defines `kernel_main()` and the minimal polling echo loop.
+- `platform/qemu-virt/uart.c` — minimal PL011 MMIO input and output for QEMU
+  `virt`.
 - `linker.ld` — defines `_start`, the fixed image address, ELF sections, and a
   16 KiB private stack in `NOLOAD` `.bss`.
 - `Makefile` — builds three object files and links them directly with LLD;
@@ -175,9 +184,8 @@ Nimera aims to:
 
 The near-term roadmap is deliberately short:
 
-1. UART input and echo
-2. Basic console abstraction
-3. Panic handling
-4. Timer support
-5. Memory discovery and reporting
-6. Minimal interactive shell
+1. Basic console abstraction
+2. Panic handling
+3. Timer support
+4. Memory discovery and reporting
+5. Minimal interactive shell
