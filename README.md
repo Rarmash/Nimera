@@ -25,12 +25,15 @@ The current milestone successfully:
 - provides a minimal kernel panic path that reports a reason and halts safely;
 - reads the AArch64 Generic Timer to measure monotonic elapsed time; and
 - discovers the physical RAM region from QEMU's Device Tree Blob;
+- separates physical RAM from clipped/merged reserved ranges and computes
+  usable ranges without an allocator;
 - installs a minimal AArch64 exception vector table for the current execution
   level; and
 - runs a small built-in kernel shell.
 
-There is currently no libc, allocator, hardware IRQ/GIC subsystem, scheduler,
-filesystem, userspace, or other larger OS subsystem.
+There is currently no libc, allocator, MMU/page-table management, hardware
+IRQ/GIC subsystem, scheduler, filesystem, userspace, or other larger OS
+subsystem.
 
 ## Boot flow
 
@@ -117,12 +120,26 @@ ELF load address. The kernel image starts at `0x40100000`, after that DTB area.
 The QEMU `virt` parser checks the DTB magic and bounds, reads its big-endian
 fields, follows the structure block, and uses the root `#address-cells` and
 `#size-cells` values to decode the memory node's `reg` property. The common API
-returns only the physical base and physical size.
+also reads the FDT memory reservation block. QEMU's current DTB has an empty
+reservation block, which is handled as a valid case; the DTB itself is still
+reserved using its actual header `totalsize`.
 
 This is physical memory discovery, not memory management. Physical memory is
-what the machine reports; usable memory would require reserving firmware, DTB,
-and kernel regions, and free memory would additionally require an allocator.
-Nimera does not implement either yet.
+what the machine reports. The memory map now reserves the exact kernel linker
+range and the DTB range from its FDT `totalsize`, plus entries from the FDT
+memory reservation block. Overlapping or adjacent reservations are merged, and
+ranges outside RAM are clipped or ignored conservatively.
+
+The terms have deliberately narrow meanings here:
+
+- physical memory is the RAM range reported by the machine;
+- reserved memory is RAM Nimera must not hand to a future allocator;
+- usable memory is physical RAM after those reservations are subtracted;
+- free memory is not known yet, because no allocator tracks allocations.
+
+Usable memory is represented as multiple ranges when reservations split the
+physical range. This is still a description of memory, not page allocation,
+heap management, or MMU setup.
 
 The normal terminal starts with:
 
@@ -226,8 +243,9 @@ QEMU's RAM size:
 make run-memory QEMU_MEMORY=128M
 ```
 
-The test prints the physical base, byte count, and whole MiB count reported by
-the Device Tree. `build-memory/` is kept separate from the ordinary build.
+The test prints physical, reserved, and usable totals, the kernel and DTB
+ranges, and the merged reserved ranges. `build-memory/` is kept separate from
+the ordinary build.
 
 To exercise the exception vector with a deliberate undefined instruction, use:
 
@@ -323,7 +341,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   the shell or one of the isolated runtime tests; it does not call UART
   functions directly.
 - `kernel/memory.c` — exposes the common memory API through the platform
-  discovery implementation.
+  discovery implementation and prints the physical/reserved/usable report.
 - `kernel/format.c` — only the small unsigned decimal/hex output helpers used
   by shell and memory test; it is not a `printf` implementation.
 - `kernel/shell.c` — fixed-buffer command shell using only the common Console
@@ -335,11 +353,13 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `arch/aarch64/timer.c` — reads `CNTFRQ_EL0` and `CNTPCT_EL0` for the common
   timer layer.
 - `platform/qemu-virt/memory.c` — minimal QEMU `virt` FDT parser for the
-  physical memory node; it does not implement an allocator.
+  physical memory node, DTB reservations, kernel range, and usable gaps; it
+  does not implement an allocator.
 - `platform/qemu-virt/uart.c` — minimal PL011 MMIO input and output for QEMU
   `virt`.
-- `linker.ld` — defines `_start`, the fixed image address, ELF sections, and a
-  16 KiB private stack in `NOLOAD` `.bss`.
+- `linker.ld` — defines `_start`, the fixed image address, ELF sections,
+  `__kernel_start`/`__kernel_end`, and a 16 KiB private stack in `NOLOAD`
+  `.bss`.
 - `Makefile` — builds the freestanding objects and links them directly with
   LLD; provides `build`, `run`, `run-panic`, `run-timer`, `run-memory`,
   `run-exception`, and `clean`.
@@ -356,6 +376,8 @@ This is a freestanding program rather than a hosted application:
 - `-ffreestanding` tells Clang that there is no standard library and no
   hosted `main()` environment.
 - `-fno-builtin` prevents implicit assumptions about libc functions.
+- `-mgeneral-regs-only` prevents generated FP/SIMD instructions; this kernel
+  has not enabled the corresponding AArch64 execution state yet.
 - `-fno-stack-protector` avoids compiler-generated calls to stack-canary
   runtime support.
 - `-fno-pic -fno-pie` avoids position-independent code and dynamic linking; the

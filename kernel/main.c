@@ -42,16 +42,11 @@ void kernel_main(void)
 #endif
 
 #if NIMERA_MEMORY_TEST
-	/* Keep the standalone memory discovery regression path unchanged. */
-	struct memory_info info = memory_discover();
+	struct memory_map map = memory_discover();
+
 	console_write("Nimera memory test\r\n");
-	console_write("Physical base: ");
-	format_u64_hex(info.physical_base);
-	console_write("\r\nPhysical memory: ");
-	format_u64_decimal(info.physical_size);
-	console_write(" bytes\r\nPhysical memory: ");
-	format_u64_decimal(info.physical_size / (1024ULL * 1024ULL));
-	console_write(" MiB\r\nMemory test complete.\r\n");
+	memory_print_map(&map);
+	console_write("Memory test complete.\r\n");
 	return;
 #endif
 

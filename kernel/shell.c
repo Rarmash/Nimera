@@ -54,15 +54,9 @@ static void shell_uptime(void)
 
 static void shell_memory(void)
 {
-	struct memory_info info = memory_discover();
+	struct memory_map map = memory_discover();
 
-	console_write("Physical base: ");
-	format_u64_hex(info.physical_base);
-	console_write("\r\nPhysical memory: ");
-	format_u64_decimal(info.physical_size);
-	console_write(" bytes\r\nPhysical memory: ");
-	format_u64_decimal(info.physical_size / (1024ULL * 1024ULL));
-	console_write(" MiB\r\n");
+	memory_print_map(&map);
 }
 
 static void shell_execute(char *line, unsigned int length)

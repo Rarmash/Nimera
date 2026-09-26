@@ -22,6 +22,7 @@ CFLAGS := \
 	-Wall -Wextra -Werror \
 	-ffreestanding \
 	-fno-builtin \
+	-mgeneral-regs-only \
 	-fno-stack-protector \
 	-fno-pic \
 	-fno-pie \
@@ -79,7 +80,7 @@ $(BUILD_DIR)/arch-timer.o: arch/aarch64/timer.c include/nimera/types.h | $(BUILD
 $(BUILD_DIR)/arch-exception.o: arch/aarch64/exception.c arch/aarch64/exception.S include/nimera/exception.h include/nimera/types.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/memory.o: kernel/memory.c include/nimera/memory.h include/nimera/types.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/memory.o: kernel/memory.c include/nimera/console.h include/nimera/format.h include/nimera/memory.h include/nimera/types.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/qemu-memory.o: platform/qemu-virt/memory.c include/nimera/memory.h include/nimera/panic.h include/nimera/types.h | $(BUILD_DIR)/.dir

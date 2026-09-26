@@ -5,6 +5,7 @@ SECTIONS
 {
 	/* Start after QEMU's default DTB placement to avoid a loader overlap. */
 	. = 0x40100000;
+	__kernel_start = .;
 
 	.text : ALIGN(16)
 	{
@@ -37,6 +38,8 @@ SECTIONS
 		. += 16K;
 		__stack_top = .;
 	}
+
+	__kernel_end = .;
 
 	/DISCARD/ :
 	{
