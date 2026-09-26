@@ -1,5 +1,6 @@
 #include <nimera/console.h>
 #include <nimera/format.h>
+#include <nimera/irq.h>
 #include <nimera/memory.h>
 #include <nimera/mmu.h>
 #include <nimera/pmm.h>
@@ -36,6 +37,7 @@ static void shell_help(void)
 	console_write("  help\r\n");
 	console_write("  echo [text]\r\n");
 	console_write("  uptime\r\n");
+	console_write("  ticks\r\n");
 	console_write("  mem\r\n");
 	console_write("  version\r\n");
 }
@@ -52,6 +54,13 @@ static void shell_uptime(void)
 	console_putc((char)('0' + ((milliseconds / 10ULL) % 10ULL)));
 	console_putc((char)('0' + (milliseconds % 10ULL)));
 	console_write(" s\r\n");
+}
+
+static void shell_ticks(void)
+{
+	console_write("Timer IRQ ticks: ");
+	format_u64_decimal(irq_timer_ticks());
+	console_write("\r\n");
 }
 
 static void shell_memory(void)
@@ -111,6 +120,8 @@ static void shell_execute(char *line, unsigned int length)
 		console_write("\r\n");
 	} else if (text_equals(line, "uptime")) {
 		shell_uptime();
+	} else if (text_equals(line, "ticks")) {
+		shell_ticks();
 	} else if (text_equals(line, "mem")) {
 		shell_memory();
 	} else if (text_equals(line, "version")) {

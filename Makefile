@@ -20,7 +20,9 @@ MMU_FAULT_TEST ?= 0
 PROTECTION_TEST ?= 0
 PROTECTION_WRITE_TEST ?= 0
 PROTECTION_EXEC_TEST ?= 0
+IRQ_TEST ?= 0
 QEMU_MEMORY ?= 128M
+QEMU_MACHINE ?= virt,gic-version=2
 
 CFLAGS := \
 	--target=aarch64-none-elf \
@@ -46,7 +48,8 @@ CFLAGS := \
 	-DNIMERA_MMU_FAULT_TEST=$(MMU_FAULT_TEST) \
 	-DNIMERA_PROTECTION_TEST=$(PROTECTION_TEST) \
 	-DNIMERA_PROTECTION_WRITE_TEST=$(PROTECTION_WRITE_TEST) \
-	-DNIMERA_PROTECTION_EXEC_TEST=$(PROTECTION_EXEC_TEST)
+	-DNIMERA_PROTECTION_EXEC_TEST=$(PROTECTION_EXEC_TEST) \
+	-DNIMERA_IRQ_TEST=$(IRQ_TEST)
 
 LDFLAGS := \
 	-T linker.ld \
@@ -55,9 +58,9 @@ LDFLAGS := \
 	-z max-page-size=0x1000 \
 	-Map=$(MAP)
 
-OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/exception-vector.o $(BUILD_DIR)/halt.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/exception.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/mmu.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/qemu-memory.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/heap.o $(BUILD_DIR)/format.o $(BUILD_DIR)/shell.o $(BUILD_DIR)/uart.o $(BUILD_DIR)/arch-exception.o
+OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/exception-vector.o $(BUILD_DIR)/halt.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/exception.o $(BUILD_DIR)/irq.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/arch-irq.o $(BUILD_DIR)/mmu.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/qemu-memory.o $(BUILD_DIR)/qemu-irq.o $(BUILD_DIR)/gic.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/heap.o $(BUILD_DIR)/format.o $(BUILD_DIR)/shell.o $(BUILD_DIR)/uart.o $(BUILD_DIR)/arch-exception.o
 
-.PHONY: build run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec clean
+.PHONY: build run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq clean
 
 build: $(ELF)
 
@@ -73,7 +76,7 @@ $(BUILD_DIR)/exception-vector.o: arch/aarch64/exception.S | $(BUILD_DIR)/.dir
 $(BUILD_DIR)/halt.o: arch/aarch64/halt.S | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/main.o: kernel/main.c include/nimera/exception.h include/nimera/format.h include/nimera/heap.h include/nimera/memory.h include/nimera/mmu.h include/nimera/panic.h include/nimera/pmm.h include/nimera/shell.h include/nimera/timer.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/main.o: kernel/main.c include/nimera/exception.h include/nimera/format.h include/nimera/heap.h include/nimera/irq.h include/nimera/memory.h include/nimera/mmu.h include/nimera/panic.h include/nimera/pmm.h include/nimera/shell.h include/nimera/timer.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/console.o: kernel/console.c include/nimera/console.h | $(BUILD_DIR)/.dir
@@ -85,13 +88,19 @@ $(BUILD_DIR)/panic.o: kernel/panic.c include/nimera/console.h include/nimera/pan
 $(BUILD_DIR)/exception.o: kernel/exception.c include/nimera/console.h include/nimera/exception.h include/nimera/format.h include/nimera/halt.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/irq.o: kernel/irq.c include/nimera/irq.h include/nimera/panic.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/timer.o: kernel/timer.c include/nimera/panic.h include/nimera/timer.h include/nimera/types.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/arch-timer.o: arch/aarch64/timer.c include/nimera/types.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/arch-timer.o: arch/aarch64/timer.c include/nimera/irq.h include/nimera/panic.h include/nimera/types.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/mmu.o: arch/aarch64/mmu.c include/nimera/memory.h include/nimera/mmu.h include/nimera/panic.h include/nimera/pmm.h include/nimera/types.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/arch-irq.o: arch/aarch64/irq.c include/nimera/irq.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/mmu.o: arch/aarch64/mmu.c include/nimera/irq.h include/nimera/memory.h include/nimera/mmu.h include/nimera/panic.h include/nimera/pmm.h include/nimera/types.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/arch-exception.o: arch/aarch64/exception.c arch/aarch64/exception.S include/nimera/exception.h include/nimera/types.h | $(BUILD_DIR)/.dir
@@ -103,6 +112,12 @@ $(BUILD_DIR)/memory.o: kernel/memory.c include/nimera/console.h include/nimera/f
 $(BUILD_DIR)/qemu-memory.o: platform/qemu-virt/memory.c include/nimera/memory.h include/nimera/panic.h include/nimera/types.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/qemu-irq.o: platform/qemu-virt/irq.c include/nimera/irq.h include/nimera/panic.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/gic.o: platform/qemu-virt/gic.c include/nimera/irq.h include/nimera/panic.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/pmm.o: kernel/pmm.c include/nimera/memory.h include/nimera/panic.h include/nimera/pmm.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -112,7 +127,7 @@ $(BUILD_DIR)/heap.o: kernel/heap.c include/nimera/heap.h include/nimera/panic.h 
 $(BUILD_DIR)/format.o: kernel/format.c include/nimera/console.h include/nimera/format.h include/nimera/types.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/shell.o: kernel/shell.c include/nimera/console.h include/nimera/format.h include/nimera/heap.h include/nimera/memory.h include/nimera/mmu.h include/nimera/pmm.h include/nimera/shell.h include/nimera/timer.h include/nimera/version.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/shell.o: kernel/shell.c include/nimera/console.h include/nimera/format.h include/nimera/heap.h include/nimera/irq.h include/nimera/memory.h include/nimera/mmu.h include/nimera/pmm.h include/nimera/shell.h include/nimera/timer.h include/nimera/version.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/uart.o: platform/qemu-virt/uart.c | $(BUILD_DIR)/.dir
@@ -124,7 +139,7 @@ $(BUILD_DIR)/.dir:
 run:
 	$(MAKE) BUILD_DIR=build PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 build
 	$(QEMU) \
-		-machine virt \
+		-machine $(QEMU_MACHINE) \
 		-cpu cortex-a72 \
 		-nographic \
 		-monitor none \
@@ -134,7 +149,7 @@ run:
 run-panic:
 	$(MAKE) BUILD_DIR=build-panic PANIC_TEST=1 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 build
 	$(QEMU) \
-		-machine virt \
+		-machine $(QEMU_MACHINE) \
 		-cpu cortex-a72 \
 		-nographic \
 		-monitor none \
@@ -144,7 +159,7 @@ run-panic:
 run-timer:
 	$(MAKE) BUILD_DIR=build-timer PANIC_TEST=0 TIMER_TEST=1 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 build
 	$(QEMU) \
-		-machine virt \
+		-machine $(QEMU_MACHINE) \
 		-cpu cortex-a72 \
 		-nographic \
 		-monitor none \
@@ -154,7 +169,7 @@ run-timer:
 run-memory:
 	$(MAKE) BUILD_DIR=build-memory PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=1 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 build
 	$(QEMU) \
-		-machine virt \
+		-machine $(QEMU_MACHINE) \
 		-m $(QEMU_MEMORY) \
 		-cpu cortex-a72 \
 		-nographic \
@@ -165,7 +180,7 @@ run-memory:
 run-exception:
 	$(MAKE) BUILD_DIR=build-exception PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=1 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 build
 	$(QEMU) \
-		-machine virt \
+		-machine $(QEMU_MACHINE) \
 		-cpu cortex-a72 \
 		-nographic \
 		-monitor none \
@@ -175,7 +190,7 @@ run-exception:
 run-pmm:
 	$(MAKE) BUILD_DIR=build-pmm PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=1 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 build
 	$(QEMU) \
-		-machine virt \
+		-machine $(QEMU_MACHINE) \
 		-m $(QEMU_MEMORY) \
 		-cpu cortex-a72 \
 		-nographic \
@@ -186,7 +201,7 @@ run-pmm:
 run-mmu:
 	$(MAKE) BUILD_DIR=build-mmu PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=1 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 build
 	$(QEMU) \
-		-machine virt \
+		-machine $(QEMU_MACHINE) \
 		-m $(QEMU_MEMORY) \
 		-cpu cortex-a72 \
 		-nographic \
@@ -197,7 +212,7 @@ run-mmu:
 run-mmu-fault:
 	$(MAKE) BUILD_DIR=build-mmu-fault PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=1 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 build
 	$(QEMU) \
-		-machine virt \
+		-machine $(QEMU_MACHINE) \
 		-m $(QEMU_MEMORY) \
 		-cpu cortex-a72 \
 		-nographic \
@@ -208,7 +223,7 @@ run-mmu-fault:
 run-heap:
 	$(MAKE) BUILD_DIR=build-heap PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=1 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 build
 	$(QEMU) \
-		-machine virt \
+		-machine $(QEMU_MACHINE) \
 		-m $(QEMU_MEMORY) \
 		-cpu cortex-a72 \
 		-nographic \
@@ -219,7 +234,7 @@ run-heap:
 run-protection:
 	$(MAKE) BUILD_DIR=build-protection PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=1 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 build
 	$(QEMU) \
-		-machine virt \
+		-machine $(QEMU_MACHINE) \
 		-m $(QEMU_MEMORY) \
 		-cpu cortex-a72 \
 		-nographic \
@@ -230,7 +245,7 @@ run-protection:
 run-protection-write:
 	$(MAKE) BUILD_DIR=build-protection-write PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=1 PROTECTION_EXEC_TEST=0 build
 	$(QEMU) \
-		-machine virt \
+		-machine $(QEMU_MACHINE) \
 		-m $(QEMU_MEMORY) \
 		-cpu cortex-a72 \
 		-nographic \
@@ -241,7 +256,7 @@ run-protection-write:
 run-protection-exec:
 	$(MAKE) BUILD_DIR=build-protection-exec PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=1 build
 	$(QEMU) \
-		-machine virt \
+		-machine $(QEMU_MACHINE) \
 		-m $(QEMU_MEMORY) \
 		-cpu cortex-a72 \
 		-nographic \
@@ -249,5 +264,16 @@ run-protection-exec:
 		-serial stdio \
 		-device loader,file=build-protection-exec/baremetal-aarch64.elf,cpu-num=0
 
+run-irq:
+	$(MAKE) BUILD_DIR=build-irq PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 IRQ_TEST=1 build
+	$(QEMU) \
+		-machine $(QEMU_MACHINE) \
+		-m $(QEMU_MEMORY) \
+		-cpu cortex-a72 \
+		-nographic \
+		-monitor none \
+		-serial stdio \
+		-device loader,file=build-irq/baremetal-aarch64.elf,cpu-num=0
+
 clean:
-	rm -rf build build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec
+	rm -rf build build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq

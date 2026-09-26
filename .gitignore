@@ -10,3 +10,4 @@ build-mmu-fault/
 build-protection/
 build-protection-write/
 build-protection-exec/
+build-irq/

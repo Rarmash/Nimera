@@ -35,11 +35,13 @@ The current milestone successfully:
   and writable RAM, heap, stack, page tables, and UART are NX;
 - installs a minimal AArch64 exception vector table for the current execution
   level; and
+- discovers the QEMU `virt` GICv2 and handles the EL1 Generic Timer through a
+  real hardware IRQ; and
 - runs a small built-in kernel shell.
 
-There is currently no libc, `malloc/free`, hardware IRQ/GIC subsystem,
-scheduler, filesystem, userspace, or other larger OS subsystem. The MMU is
-enabled after early initialization, but this is not yet a general virtual
+There is currently no libc, `malloc/free`, scheduler, filesystem, userspace,
+UART IRQ path, interrupt-driven console, or other larger OS subsystem. The MMU
+is enabled after early initialization, but this is not yet a general virtual
 memory manager.
 
 ## Boot flow
@@ -70,7 +72,12 @@ The entry point is `_start` in `arch/aarch64/boot.S`:
 6. The current console implementation delegates to the QEMU `virt` PL011
    driver, which writes output to the data register at `0x09000000` and polls
    input status.
-7. The shell reads input through the Console API, collects one fixed-size line,
+7. `irq_init()` discovers the GICv2 distributor, CPU interface, and architected
+   timer PPI from the DTB, maps the GIC MMIO pages as Device memory, programs a
+   10 Hz absolute-deadline timer, and enables IRQs only after setup.
+8. An IRQ vector stub saves all general-purpose registers, calls the GIC/timer
+   handler, restores the interrupted context, and returns with `eret`.
+9. The shell reads input through the Console API, collects one fixed-size line,
    parses one of its built-in commands, and prints the next prompt.
 
 With the current QEMU `virt` plus generic-loader invocation, `CurrentEL` was
@@ -79,8 +86,9 @@ perform an EL2-to-EL1 transition or assume one is needed.
 
 The vector table is a fixed, 2048-byte-aligned AArch64 table. Its synchronous,
 IRQ, FIQ, and SError slots enter small assembly stubs. Synchronous exceptions
-are reported diagnostically; the other categories currently use the same fatal
-path and are not an IRQ implementation.
+are reported diagnostically. The IRQ slot saves all general-purpose registers,
+calls the minimal GICv2/timer handler, restores them, and returns with `eret`;
+FIQ and SError still use the fatal path.
 
 For a synchronous exception, `ESR_EL1` identifies the reason, `ELR_EL1` is the
 instruction address to which execution would return, and `FAR_EL1` is the
@@ -103,7 +111,9 @@ loop. It does not use UART or PL011 symbols directly.
 The timer path is also separate from the normal echo flow. The common timer API
 provides the counter frequency, the current counter value, and monotonic uptime
 in milliseconds. Only `arch/aarch64/timer.c` reads the AArch64 timer system
-registers; kernel code does not contain `mrs` instructions.
+registers; kernel code does not contain `mrs` instructions. The same
+architectural timer is also armed as an EL1 physical-timer IRQ, but the normal
+shell does not print every tick.
 
 The counter is a continuously increasing hardware tick value. Its frequency is
 the number of counter ticks per second. `timer_init()` records the current
@@ -115,6 +125,27 @@ This is monotonic uptime, not a clock showing the current time of day: Nimera
 does not yet have an RTC, calendar date, wall clock, or timezone handling.
 Calling `timer_uptime_ms()` before `timer_init()` triggers `panic()` rather than
 returning an uninitialized value.
+
+## First hardware IRQ
+
+The current QEMU `virt,gic-version=2` machine exposes a GICv2. The platform
+DTB parser discovers the GIC distributor and CPU-interface MMIO ranges and the
+non-secure EL1 physical timer PPI; these values are not guessed in the driver.
+`arch/aarch64/mmu.c` maps both GIC ranges as Device-nGnRnE, read/write,
+non-executable memory before enabling the MMU.
+
+After setup, the kernel clears the AArch64 `DAIF.I` IRQ mask, programs
+`CNTP_CVAL_EL0` for an absolute 10 Hz deadline, enables the timer PPI, and
+handles each interrupt by acknowledging it, incrementing a `volatile`
+single-core counter, rearming the next absolute deadline, and writing
+end-of-interrupt. `volatile` makes each C access observe the object rather than
+being optimized into a cached value; it is not a general SMP synchronization
+primitive, and Nimera has no SMP or locking support yet.
+
+`make run-irq` waits for five actual timer IRQs with `wfe`, rather than polling
+the counter, and then reports the observed count. The normal shell's `ticks`
+command reads the same count. This is an interrupt demonstration, not a
+scheduler or a general interrupt framework.
 
 ## Physical memory discovery
 
@@ -197,11 +228,13 @@ The normal terminal starts with:
 ```text
 Nimera booting...
 MMU: enabled
+irq: enabled
 kernel: starting shell
 nimera $
 ```
 
-The built-in commands are `help`, `echo`, `uptime`, `mem`, and `version`.
+The built-in commands are `help`, `echo`, `uptime`, `ticks`, `mem`, and
+`version`. `ticks` reports the number of handled EL1 timer IRQs.
 They are compiled into the kernel; there is no filesystem, current working
 directory, userspace, or external program execution.
 
@@ -288,6 +321,26 @@ tick
 Timer test complete.
 ```
 
+To exercise the first real hardware IRQ path, use:
+
+```sh
+make run-irq QEMU_MEMORY=128M
+```
+
+It discovers the GIC and timer from the DTB, waits for five timer interrupts
+without polling the counter, and prints output similar to:
+
+```text
+Nimera IRQ test
+GIC: v2
+Distributor: 0x8000000
+CPU interface: 0x8010000
+EL1 physical timer INTID: 30
+IRQs enabled
+Timer IRQ ticks: 5
+IRQ test complete.
+```
+
 To exercise physical memory discovery, use an isolated test image and choose
 QEMU's RAM size:
 
@@ -365,7 +418,7 @@ Instruction Abort when branching to a `ret` instruction stored in writable
 The ordinary `make run` starts the built-in kernel shell. Its line buffer is a
 fixed 128-byte array: printable ASCII is echoed into it, Enter executes the
 line, and Backspace removes the previous character. Input beyond the buffer is
-ignored safely. Parsing only recognizes the five commands shown above; there
+ignored safely. Parsing only recognizes the six commands shown above; there
 is no quoting, escaping, piping, redirection, history, or external command
 execution.
 
@@ -393,6 +446,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │       ├── format.h
 │       ├── halt.h
 │       ├── heap.h
+│       ├── irq.h
 │       ├── memory.h
 │       ├── mmu.h
 │       ├── panic.h
@@ -408,12 +462,14 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │       ├── exception.c
 │       ├── halt.S
 │       ├── mmu.c
+│       ├── irq.c
 │       └── timer.c
 ├── kernel/
 │   ├── console.c
 │   ├── exception.c
 │   ├── format.c
 │   ├── heap.c
+│   ├── irq.c
 │   ├── main.c
 │   ├── memory.c
 │   ├── panic.c
@@ -422,6 +478,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │   └── timer.c
 └── platform/
     └── qemu-virt/
+        ├── gic.c
+        ├── irq.c
         ├── memory.c
         └── uart.c
 ```
@@ -433,6 +491,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `arch/aarch64/exception.c` — reads `CurrentEL`, installs `VBAR_EL1` or
   `VBAR_EL2`, and contains the deliberate exception-test instruction.
 - `arch/aarch64/halt.S` — the small `wfe`-based `cpu_halt()` primitive.
+- `arch/aarch64/irq.c` — enables/disables the AArch64 `DAIF.I` IRQ mask and
+  provides the architecture-specific wait-for-event operation.
 - `arch/aarch64/mmu.c` — builds minimal identity page tables from PMM, maps
   Normal RAM and the Device-nGnRnE PL011 page, splits the kernel block into
   permissioned L3 pages, validates representative permissions, and enables
@@ -443,6 +503,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   helpers used where a number must be displayed.
 - `include/nimera/halt.h` — the architecture-neutral CPU halt declaration.
 - `include/nimera/heap.h` — the kernel heap API and heap statistics.
+- `include/nimera/irq.h` — the small common timer-IRQ API and platform-discovery
+  structure.
 - `include/nimera/shell.h` — the non-returning built-in shell entry point.
 - `include/nimera/memory.h` — the common physical memory information API.
 - `include/nimera/mmu.h` — the small MMU state, initialization, and test API.
@@ -466,7 +528,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `kernel/heap.c` — the small PMM-backed first-fit heap with block splitting,
   coalescing, and validation of frees.
 - `kernel/shell.c` — fixed-buffer command shell using only the common Console
-  API; it provides the five built-in commands and basic line editing.
+  API; it provides the six built-in commands and basic line editing.
 - `kernel/panic.c` — prints the panic report through Console API and halts in
   a simple `wfe` loop.
 - `kernel/pmm.c` — bitmap physical page manager initialized from the memory
@@ -474,19 +536,27 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `kernel/timer.c` — validates timer frequency and exposes frequency, ticks,
   and monotonic milliseconds without architecture instructions.
 - `arch/aarch64/timer.c` — reads `CNTFRQ_EL0` and `CNTPCT_EL0` for the common
-  timer layer.
+  timer layer and programs `CNTP_CVAL_EL0`/`CNTP_CTL_EL0` for the EL1 physical
+  timer IRQ.
 - `platform/qemu-virt/memory.c` — minimal QEMU `virt` FDT parser for the
   physical memory node, DTB reservations, kernel range, and usable gaps; it
   does not implement an allocator.
 - `platform/qemu-virt/uart.c` — minimal PL011 MMIO input and output for QEMU
   `virt`.
+- `platform/qemu-virt/irq.c` — minimal DTB discovery of the GICv2 MMIO ranges
+  and the architected timer PPI.
+- `platform/qemu-virt/gic.c` — minimal one-CPU GICv2 setup, acknowledge, and
+  end-of-interrupt operations.
+- `kernel/irq.c` — common timer IRQ counter and dispatch path, separate from
+  GIC and PL011 details.
 - `linker.ld` — defines `_start`, the fixed image address, ELF sections,
   `__kernel_start`/`__kernel_end`, page-aligned section boundaries, and a 16
   KiB private stack in `NOLOAD` `.bss`.
 - `Makefile` — builds the freestanding objects and links them directly with
   LLD; provides `build`, `run`, `run-panic`, `run-timer`, `run-memory`,
   `run-pmm`, `run-heap`, `run-exception`, `run-mmu`, `run-mmu-fault`,
-  `run-protection`, `run-protection-write`, `run-protection-exec`, and `clean`.
+  `run-protection`, `run-protection-write`, `run-protection-exec`, `run-irq`,
+  and `clean`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -513,9 +583,10 @@ This is a freestanding program rather than a hosted application:
 - `-DNIMERA_PANIC_TEST=0`, `-DNIMERA_TIMER_TEST=0`,
   `-DNIMERA_MEMORY_TEST=0`, `-DNIMERA_EXCEPTION_TEST=0`,
   `-DNIMERA_PMM_TEST=0`, `-DNIMERA_HEAP_TEST=0`, `-DNIMERA_MMU_TEST=0`,
-  `-DNIMERA_MMU_FAULT_TEST=0`, and the three protection-test defines keep the
-  normal build path free of test flows; dedicated Make targets enable their
-  respective switch in isolated build directories.
+  `-DNIMERA_MMU_FAULT_TEST=0`, the three protection-test defines, and
+  `-DNIMERA_IRQ_TEST=0` keep the normal build path free of test flows;
+  dedicated Make targets enable their respective switch in isolated build
+  directories.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.

@@ -4,6 +4,7 @@
 #include <nimera/exception.h>
 #include <nimera/format.h>
 #include <nimera/heap.h>
+#include <nimera/irq.h>
 #include <nimera/memory.h>
 #include <nimera/mmu.h>
 #include <nimera/panic.h>
@@ -15,6 +16,33 @@
 
 #if NIMERA_PROTECTION_TEST
 static volatile u64 protection_data = 0x4e696d657261ULL;
+#endif
+
+#if NIMERA_IRQ_TEST
+static void irq_test(void)
+{
+	struct irq_platform_info info = irq_platform_discover();
+
+	console_write("Nimera IRQ test\r\nGIC: v2\r\nDistributor: ");
+	format_u64_hex(info.gic_distributor_base);
+	console_write("\r\nCPU interface: ");
+	format_u64_hex(info.gic_cpu_base);
+	console_write("\r\nEL1 physical timer INTID: ");
+	format_u64_decimal(info.timer_intid);
+	console_write("\r\n");
+	irq_init();
+	irq_enable();
+	console_write("IRQs enabled\r\n");
+	while (irq_timer_ticks() < 5ULL) {
+		arch_wait_for_event();
+	}
+	console_write("Timer IRQ ticks: ");
+	format_u64_decimal(irq_timer_ticks());
+	console_write("\r\n");
+	irq_disable();
+	arch_timer_irq_stop();
+	console_write("IRQ test complete.\r\n");
+}
 #endif
 
 #if NIMERA_TIMER_TEST
@@ -247,6 +275,13 @@ void kernel_main(void)
 	mmu_init(&map);
 	heap_init();
 
+#if NIMERA_IRQ_TEST
+	irq_test();
+	return;
+#endif
+	irq_init();
+	irq_enable();
+
 #if NIMERA_MEMORY_TEST
 	console_write("Nimera memory test\r\n");
 	memory_print_map(&map);
@@ -315,6 +350,7 @@ void kernel_main(void)
 
 	console_write("Nimera booting...\r\n");
 	console_write("MMU: enabled\r\n");
+	console_write("irq: enabled\r\n");
 	console_write("kernel: starting shell\r\n");
 	shell_run();
 }

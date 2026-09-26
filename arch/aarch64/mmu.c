@@ -1,4 +1,5 @@
 #include <nimera/mmu.h>
+#include <nimera/irq.h>
 #include <nimera/panic.h>
 #include <nimera/pmm.h>
 
@@ -227,6 +228,18 @@ static void map_permission_range(descriptor_t *root, u64 start, u64 end,
 	}
 }
 
+static void map_device_range(descriptor_t *root, u64 start, u64 size)
+{
+	if (size > ~0ULL - start) {
+		panic("MMIO range overflows address space");
+	}
+	for (u64 address = page_align_down(start);
+	     address < page_align_up(start + size); address += NIMERA_PAGE_SIZE) {
+		map_page(root, address,
+			 descriptor_attributes(device_rw_nx(0ULL)));
+	}
+}
+
 static u64 symbol_address(const char *symbol)
 {
 	return (u64)(unsigned long)symbol;
@@ -417,6 +430,13 @@ void mmu_init(const struct memory_map *map)
 				     descriptor_attributes(normal_rw_nx(0ULL)));
 	map_page(root, UART_PHYSICAL_ADDRESS,
 		 descriptor_attributes(device_rw_nx(UART_PHYSICAL_ADDRESS)));
+	{
+		struct irq_platform_info irq_info = irq_platform_discover();
+
+		map_device_range(root, irq_info.gic_distributor_base,
+				 irq_info.gic_distributor_size);
+		map_device_range(root, irq_info.gic_cpu_base, irq_info.gic_cpu_size);
+	}
 
 	__asm__ volatile("msr mair_el1, %0" :: "r"(mair) : "memory");
 	__asm__ volatile("msr tcr_el1, %0" :: "r"(tcr) : "memory");
