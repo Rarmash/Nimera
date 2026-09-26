@@ -22,7 +22,8 @@ The current milestone successfully:
 - routes kernel I/O through a minimal platform-independent console API;
 - writes `Hello from kernel` through QEMU `virt`'s PL011 UART; and
 - enables polling UART input and echoes each received character;
-- provides a minimal kernel panic path that reports a reason and halts safely.
+- provides a minimal kernel panic path that reports a reason and halts safely;
+- reads the AArch64 Generic Timer to measure monotonic elapsed time.
 
 There is currently no libc, allocator, interrupt subsystem, scheduler,
 filesystem, userspace, or other larger OS subsystem.
@@ -64,6 +65,22 @@ The panic path is separate from the normal echo flow. `panic()` writes a fatal
 message and reason through the common console API, prints `System halted.`, and
 then remains in a CPU-local `wfe` loop. It does not use UART or PL011 symbols
 directly.
+
+The timer path is also separate from the normal echo flow. The common timer API
+provides the counter frequency, the current counter value, and monotonic uptime
+in milliseconds. Only `arch/aarch64/timer.c` reads the AArch64 timer system
+registers; kernel code does not contain `mrs` instructions.
+
+The counter is a continuously increasing hardware tick value. Its frequency is
+the number of counter ticks per second. `timer_init()` records the current
+counter value as Nimera's boot/reference tick, and `timer_uptime_ms()` converts
+the difference from that reference into elapsed milliseconds. `timer_ticks()`
+still exposes the raw hardware counter.
+
+This is monotonic uptime, not a clock showing the current time of day: Nimera
+does not yet have an RTC, calendar date, wall clock, or timezone handling.
+Calling `timer_uptime_ms()` before `timer_init()` triggers `panic()` rather than
+returning an uninitialized value.
 
 The terminal output is:
 
@@ -141,6 +158,23 @@ The `noreturn` attribute on `panic()` tells Clang that the function cannot
 return to its caller. This matches the permanent halt loop and lets the
 compiler reason correctly about control flow.
 
+To exercise the Generic Timer polling test, use:
+
+```sh
+make run-timer
+```
+
+This builds an isolated image in `build-timer/` with `TIMER_TEST=1`. It waits
+for three approximately one-second intervals using the architectural counter:
+
+```text
+Nimera timer test
+tick
+tick
+tick
+Timer test complete.
+```
+
 `make clean` removes generated objects, the ELF, and the link map:
 
 ```sh
@@ -161,14 +195,18 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 ├── include/
 │   └── nimera/
 │       ├── console.h
-│       └── panic.h
+│       ├── panic.h
+│       ├── timer.h
+│       └── types.h
 ├── arch/
 │   └── aarch64/
-│       └── boot.S
+│       ├── boot.S
+│       └── timer.c
 ├── kernel/
 │   ├── console.c
 │   ├── main.c
-│   └── panic.c
+│   ├── panic.c
+│   └── timer.c
 └── platform/
     └── qemu-virt/
         └── uart.c
@@ -178,18 +216,24 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   calls C, and provides the fallback loop if C returns.
 - `include/nimera/console.h` — the small platform-independent console API.
 - `include/nimera/panic.h` — the non-returning `panic()` API.
+- `include/nimera/timer.h` — the platform-independent timer API.
+- `include/nimera/types.h` — the minimal freestanding `u64` type definition.
 - `kernel/console.c` — delegates the common console API to the current UART
   implementation.
 - `kernel/main.c` — defines `kernel_main()` and the minimal polling echo loop;
   it does not call UART functions directly.
 - `kernel/panic.c` — prints the panic report through Console API and halts in
   a simple `wfe` loop.
+- `kernel/timer.c` — validates timer frequency and exposes frequency, ticks,
+  and monotonic milliseconds without architecture instructions.
+- `arch/aarch64/timer.c` — reads `CNTFRQ_EL0` and `CNTPCT_EL0` for the common
+  timer layer.
 - `platform/qemu-virt/uart.c` — minimal PL011 MMIO input and output for QEMU
   `virt`.
 - `linker.ld` — defines `_start`, the fixed image address, ELF sections, and a
   16 KiB private stack in `NOLOAD` `.bss`.
-- `Makefile` — builds five object files and links them directly with LLD;
-  provides `build`, `run`, `run-panic`, and `clean`.
+- `Makefile` — builds seven object files and links them directly with LLD;
+  provides `build`, `run`, `run-panic`, `run-timer`, and `clean`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -211,8 +255,9 @@ This is a freestanding program rather than a hosted application:
   that would require additional runtime support.
 - `-Iinclude` makes the project's freestanding headers available without
   depending on host or libc headers.
-- `-DNIMERA_PANIC_TEST=0` keeps the normal build path free of the panic test;
-  `make run-panic` changes it to `1` for the separate runtime check.
+- `-DNIMERA_PANIC_TEST=0` and `-DNIMERA_TIMER_TEST=0` keep the normal build
+  path free of test flows; the dedicated Make targets enable their respective
+  switch in isolated build directories.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.
@@ -242,6 +287,5 @@ Nimera aims to:
 
 The near-term roadmap is deliberately short:
 
-1. Timer support
-2. Memory discovery and reporting
-3. Minimal interactive shell
+1. Memory discovery and reporting
+2. Minimal interactive shell

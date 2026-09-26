@@ -10,6 +10,7 @@ CC := $(LLVM_PREFIX)/bin/clang
 LD := $(LLD_PREFIX)/bin/ld.lld
 QEMU ?= qemu-system-aarch64
 PANIC_TEST ?= 0
+TIMER_TEST ?= 0
 
 CFLAGS := \
 	--target=aarch64-none-elf \
@@ -24,7 +25,8 @@ CFLAGS := \
 	-fno-asynchronous-unwind-tables \
 	-fno-unwind-tables \
 	-Iinclude \
-	-DNIMERA_PANIC_TEST=$(PANIC_TEST)
+	-DNIMERA_PANIC_TEST=$(PANIC_TEST) \
+	-DNIMERA_TIMER_TEST=$(TIMER_TEST)
 
 LDFLAGS := \
 	-T linker.ld \
@@ -33,9 +35,9 @@ LDFLAGS := \
 	-z max-page-size=0x1000 \
 	-Map=$(MAP)
 
-OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/uart.o
+OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/uart.o
 
-.PHONY: build run run-panic clean
+.PHONY: build run run-panic run-timer clean
 
 build: $(ELF)
 
@@ -52,6 +54,12 @@ $(BUILD_DIR)/console.o: kernel/console.c include/nimera/console.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/panic.o: kernel/panic.c include/nimera/console.h include/nimera/panic.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/timer.o: kernel/timer.c include/nimera/panic.h include/nimera/timer.h include/nimera/types.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/arch-timer.o: arch/aarch64/timer.c include/nimera/types.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/uart.o: platform/qemu-virt/uart.c | $(BUILD_DIR)/.dir
@@ -80,5 +88,15 @@ run-panic:
 		-serial stdio \
 		-device loader,file=build-panic/baremetal-aarch64.elf,cpu-num=0
 
+run-timer:
+	$(MAKE) BUILD_DIR=build-timer PANIC_TEST=0 TIMER_TEST=1 build
+	$(QEMU) \
+		-machine virt \
+		-cpu cortex-a72 \
+		-nographic \
+		-monitor none \
+		-serial stdio \
+		-device loader,file=build-timer/baremetal-aarch64.elf,cpu-num=0
+
 clean:
-	rm -rf build build-panic
+	rm -rf build build-panic build-timer
