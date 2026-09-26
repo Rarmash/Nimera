@@ -27,13 +27,15 @@ The current milestone successfully:
 - discovers the physical RAM region from QEMU's Device Tree Blob;
 - separates physical RAM from clipped/merged reserved ranges, computes usable
   ranges, and manages their full 4 KiB pages with a bitmap PMM;
+- provides a small kernel heap layered on PMM-backed pages with aligned
+  first-fit blocks, splitting, and local coalescing;
 - installs a minimal AArch64 exception vector table for the current execution
   level; and
 - runs a small built-in kernel shell.
 
-There is currently no libc, heap allocator, `malloc`, MMU/page-table
-management, hardware IRQ/GIC subsystem, scheduler, filesystem, userspace, or
-other larger OS subsystem.
+There is currently no libc, `malloc/free`, MMU/page-table management, hardware
+IRQ/GIC subsystem, scheduler, filesystem, userspace, or other larger OS
+subsystem.
 
 ## Boot flow
 
@@ -143,6 +145,14 @@ The terms have deliberately narrow meanings here:
 Usable memory is represented as multiple ranges when reservations split the
 physical range. The PMM manages only complete 4 KiB pages in those ranges. It
 does not provide a heap, virtual memory, or MMU setup.
+
+The kernel heap is a separate layer above PMM. PMM manages fixed 4 KiB physical
+pages, while the heap returns smaller aligned blocks such as 1, 32, or 1000
+bytes. When the heap has no suitable block, it obtains another page from PMM.
+The current heap uses identity physical pointers because the MMU is disabled;
+this was checked through `SCTLR_EL1.M` at initialization. `kfree()` makes a
+block reusable inside the heap, but completely unused heap pages are not yet
+returned to PMM.
 
 The normal terminal starts with:
 
@@ -267,6 +277,18 @@ and prints managed/free/allocated statistics. The PMM returns an explicit
 failure when no page remains; invalid frees and double frees call `panic()`.
 `build-pmm/` is separate from the ordinary build.
 
+To exercise the kernel heap, use:
+
+```sh
+make run-heap QEMU_MEMORY=128M
+```
+
+This test allocates blocks of several sizes, writes and verifies byte
+patterns, demonstrates split/reuse after `kfree()`, and reports heap-reserved,
+allocated, and reusable bytes. Heap backing pages come only from PMM; this is
+not a libc allocator and it does not configure virtual memory. `build-heap/`
+is kept separate from all other test builds.
+
 To exercise the exception vector with a deliberate undefined instruction, use:
 
 ```sh
@@ -307,6 +329,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │       ├── exception.h
 │       ├── format.h
 │       ├── halt.h
+│       ├── heap.h
 │       ├── memory.h
 │       ├── panic.h
 │       ├── pmm.h
@@ -320,11 +343,13 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │       ├── exception.S
 │       ├── exception.c
 │       ├── halt.S
+│       ├── mmu.c
 │       └── timer.c
 ├── kernel/
 │   ├── console.c
 │   ├── exception.c
 │   ├── format.c
+│   ├── heap.c
 │   ├── main.c
 │   ├── memory.c
 │   ├── panic.c
@@ -344,11 +369,14 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `arch/aarch64/exception.c` — reads `CurrentEL`, installs `VBAR_EL1` or
   `VBAR_EL2`, and contains the deliberate exception-test instruction.
 - `arch/aarch64/halt.S` — the small `wfe`-based `cpu_halt()` primitive.
+- `arch/aarch64/mmu.c` — reads `SCTLR_EL1.M` to verify the current MMU state;
+  it does not enable or configure the MMU.
 - `include/nimera/console.h` — the small platform-independent console API.
 - `include/nimera/exception.h` — exception initialization and fatal-report API.
 - `include/nimera/format.h` — minimal unsigned decimal and hexadecimal output
   helpers used where a number must be displayed.
 - `include/nimera/halt.h` — the architecture-neutral CPU halt declaration.
+- `include/nimera/heap.h` — the kernel heap API and heap statistics.
 - `include/nimera/shell.h` — the non-returning built-in shell entry point.
 - `include/nimera/memory.h` — the common physical memory information API.
 - `include/nimera/panic.h` — the non-returning `panic()` API.
@@ -368,6 +396,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   discovery implementation and prints the physical/reserved/usable report.
 - `kernel/format.c` — only the small unsigned decimal/hex output helpers used
   by shell and memory test; it is not a `printf` implementation.
+- `kernel/heap.c` — the small PMM-backed first-fit heap with block splitting,
+  coalescing, and validation of frees.
 - `kernel/shell.c` — fixed-buffer command shell using only the common Console
   API; it provides the five built-in commands and basic line editing.
 - `kernel/panic.c` — prints the panic report through Console API and halts in
@@ -383,12 +413,14 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   does not implement an allocator.
 - `platform/qemu-virt/uart.c` — minimal PL011 MMIO input and output for QEMU
   `virt`.
+- `arch/aarch64/mmu.c` — reads `SCTLR_EL1.M` to verify the current MMU state;
+  it does not enable or configure the MMU.
 - `linker.ld` — defines `_start`, the fixed image address, ELF sections,
   `__kernel_start`/`__kernel_end`, and a 16 KiB private stack in `NOLOAD`
   `.bss`.
 - `Makefile` — builds the freestanding objects and links them directly with
   LLD; provides `build`, `run`, `run-panic`, `run-timer`, `run-memory`,
-  `run-exception`, and `clean`.
+  `run-pmm`, `run-heap`, `run-exception`, and `clean`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -413,10 +445,10 @@ This is a freestanding program rather than a hosted application:
 - `-Iinclude` makes the project's freestanding headers available without
   depending on host or libc headers.
 - `-DNIMERA_PANIC_TEST=0`, `-DNIMERA_TIMER_TEST=0`,
-  `-DNIMERA_MEMORY_TEST=0`, `-DNIMERA_EXCEPTION_TEST=0`, and
-  `-DNIMERA_PMM_TEST=0` keep the normal build path free of test flows; the
-  dedicated Make targets enable their respective switch in isolated build
-  directories.
+  `-DNIMERA_MEMORY_TEST=0`, `-DNIMERA_EXCEPTION_TEST=0`,
+  `-DNIMERA_PMM_TEST=0`, and `-DNIMERA_HEAP_TEST=0` keep the normal build path
+  free of test flows; the dedicated Make targets enable their respective
+  switch in isolated build directories.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.

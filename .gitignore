@@ -4,3 +4,4 @@ build-timer/
 build-memory/
 build-exception/
 build-pmm/
+build-heap/

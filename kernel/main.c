@@ -3,11 +3,14 @@
 #include <nimera/console.h>
 #include <nimera/exception.h>
 #include <nimera/format.h>
+#include <nimera/heap.h>
 #include <nimera/memory.h>
 #include <nimera/panic.h>
 #include <nimera/pmm.h>
 #include <nimera/shell.h>
 #include <nimera/timer.h>
+
+#define NULL ((void *)0)
 
 #if NIMERA_TIMER_TEST
 static void timer_test(void)
@@ -26,6 +29,106 @@ static void timer_test(void)
 	}
 
 	console_write("Timer test complete.\r\n");
+}
+#endif
+
+#if NIMERA_HEAP_TEST
+static void fill_pattern(unsigned char *data, u64 size, unsigned char value)
+{
+	for (u64 index = 0ULL; index < size; ++index) {
+		data[index] = value;
+	}
+}
+
+static void check_pattern(const unsigned char *data, u64 size,
+				  unsigned char value)
+{
+	for (u64 index = 0ULL; index < size; ++index) {
+		if (data[index] != value) {
+			panic("heap pattern verification failed");
+		}
+	}
+}
+
+static void print_pointer(const char *label, const void *pointer)
+{
+	console_write(label);
+	format_u64_hex((u64)(unsigned long)pointer);
+	console_write("\r\n");
+}
+
+static void heap_test(void)
+{
+	unsigned char *one;
+	unsigned char *small;
+	unsigned char *medium;
+	unsigned char *large;
+	unsigned char *growth;
+	unsigned char *reused;
+	u64 pmm_before = pmm_free_pages();
+
+	console_write("Nimera heap test\r\nMMU: disabled (SCTLR_EL1.M=0)\r\n");
+	console_write("PMM free before heap growth: ");
+	format_u64_decimal(pmm_before);
+	console_write("\r\n");
+	one = (unsigned char *)kmalloc(1ULL);
+	small = (unsigned char *)kmalloc(32ULL);
+	medium = (unsigned char *)kmalloc(100ULL);
+	large = (unsigned char *)kmalloc(1000ULL);
+	growth = (unsigned char *)kmalloc(4000ULL);
+	console_write("PMM free after heap growth: ");
+	format_u64_decimal(pmm_free_pages());
+	console_write("\r\n");
+	console_write("Allocated:\r\n");
+	print_pointer("  1 byte   -> ", one);
+	print_pointer("  32 bytes -> ", small);
+	print_pointer("  100 bytes -> ", medium);
+	print_pointer("  1000 bytes -> ", large);
+	print_pointer("  4000 bytes -> ", growth);
+
+	if (one == NULL || small == NULL || medium == NULL || large == NULL ||
+	    growth == NULL ||
+	    (((u64)(unsigned long)one | (u64)(unsigned long)small |
+	      (u64)(unsigned long)medium | (u64)(unsigned long)large |
+	      (u64)(unsigned long)growth) & 15ULL) != 0ULL) {
+		panic("heap allocation or alignment test failed");
+	}
+	fill_pattern(one, 1ULL, 0x11U);
+	fill_pattern(small, 32ULL, 0x22U);
+	fill_pattern(medium, 100ULL, 0x33U);
+	fill_pattern(large, 1000ULL, 0x44U);
+	fill_pattern(growth, 4000ULL, 0x55U);
+	check_pattern(one, 1ULL, 0x11U);
+	check_pattern(small, 32ULL, 0x22U);
+	check_pattern(medium, 100ULL, 0x33U);
+	check_pattern(large, 1000ULL, 0x44U);
+	check_pattern(growth, 4000ULL, 0x55U);
+	console_write("Patterns verified.\r\n");
+
+	kfree(medium);
+	console_write("Freed block: ");
+	format_u64_hex((u64)(unsigned long)medium);
+	console_write("\r\nAllocated again: ");
+	reused = (unsigned char *)kmalloc(80ULL);
+	if (reused == NULL || reused != medium) {
+		panic("heap free block was not reused");
+	}
+	format_u64_hex((u64)(unsigned long)reused);
+	console_write("\r\n");
+
+	kfree(NULL);
+	kfree(one);
+	kfree(small);
+	kfree(reused);
+	kfree(large);
+	kfree(growth);
+	console_write("Heap reserved: ");
+	format_u64_decimal(heap_reserved_bytes());
+	console_write(" bytes\r\nHeap allocated: ");
+	format_u64_decimal(heap_allocated_bytes());
+	console_write(" bytes\r\nHeap reusable: ");
+	format_u64_decimal(heap_reusable_bytes());
+	console_write(" bytes\r\nHeap test complete.\r\n");
 }
 #endif
 
@@ -100,6 +203,7 @@ void kernel_main(void)
 
 	struct memory_map map = memory_discover();
 	pmm_init(&map);
+	heap_init();
 
 #if NIMERA_MEMORY_TEST
 	console_write("Nimera memory test\r\n");
@@ -110,6 +214,11 @@ void kernel_main(void)
 
 #if NIMERA_PMM_TEST
 	pmm_test();
+	return;
+#endif
+
+#if NIMERA_HEAP_TEST
+	heap_test();
 	return;
 #endif
 
