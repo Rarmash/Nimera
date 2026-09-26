@@ -1,4 +1,5 @@
 #include <nimera/console.h>
+#include <nimera/block.h>
 #include <nimera/editor.h>
 #include <nimera/format.h>
 #include <nimera/irq.h>
@@ -68,6 +69,22 @@ static void shell_help(void)
 	console_write("  mv <source> <destination>\r\n");
 	console_write("  edit <path>\r\n");
 	console_write("  terminal\r\n");
+	console_write("  disks\r\n");
+}
+
+static void shell_disks(void)
+{
+	console_write("Block devices:\r\n");
+	if (block_count() == 0U) {
+		console_write("  none\r\n");
+		return;
+	}
+	for (unsigned int index = 0U; index < block_count(); ++index) {
+		const struct block_device *device = block_get(index);
+		console_write("  "); console_write(device->name); console_write(" ");
+		format_u64_decimal(device->block_size); console_write(" bytes/block, ");
+		format_u64_decimal(device->block_count); console_write(" blocks\r\n");
+	}
 }
 
 static void shell_ls(const char *path)
@@ -479,6 +496,8 @@ static void shell_execute(char *line, unsigned int length)
 		shell_edit(argument);
 	} else if (text_equals(line, "terminal")) {
 		shell_terminal();
+	} else if (text_equals(line, "disks")) {
+		shell_disks();
 	} else if (length != 0U) {
 		console_write("Unknown command: ");
 		console_write(line);

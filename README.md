@@ -26,6 +26,10 @@ The current milestone successfully:
 - provides a minimal kernel panic path that reports a reason and halts safely;
 - reads the AArch64 Generic Timer to measure monotonic elapsed time; and
 - discovers the physical RAM region from QEMU's Device Tree Blob;
+- discovers QEMU `virtio,mmio` devices from the same Device Tree and exposes a
+  synchronous `disk0` block device when a `virtio-blk-device` is attached;
+- reads and writes 512-byte sectors through a small modern VirtIO split queue,
+  with a persistent marker test on a reserved last sector;
 - separates physical RAM from clipped/merged reserved ranges, computes usable
   ranges, and manages their full 4 KiB pages with a bitmap PMM;
 - provides a small kernel heap layered on PMM-backed pages with aligned
@@ -437,6 +441,28 @@ independent of the physical console device; the current implementation is a
 thin delegation layer, not a driver framework or HAL. PL011 registers and
 platform-specific details remain in `platform/qemu-virt/uart.c`.
 
+The block layer is deliberately below the filesystem boundary. Its common API
+knows only named devices, sector size/capacity, and one synchronous read/write
+request. The QEMU backend discovers `virtio,mmio` nodes from the DTB and drives
+modern VirtIO MMIO directly. It does not provide partitions, a block cache, a
+filesystem, or VFS integration.
+
+`make run-block` attaches `build-storage/nimera-test.img`, a persistent raw
+64 MiB image. `make disk-create` creates it only when absent; `make disk-reset`
+intentionally removes and recreates it. The isolated test uses the image's
+last sector, never block 0: the first run writes a marker and a second run
+reports `Persistent marker: present`. Normal `make run` does not attach or
+require this image. The shell's `disks` command only reports discovered
+devices; RAMFS remains the root filesystem.
+
+Device Tree is the machine's hardware inventory: QEMU hands the kernel a
+binary table saying which memory and MMIO devices exist and where they live.
+Nimera currently parses only the fields needed for QEMU `virtio,mmio` and
+`memory` nodes. Physical memory is the RAM region reported by that table; it
+is not the same as usable memory after reservations, and neither is the same
+as currently free memory. There is still no allocator change, filesystem, or
+MMU mapping policy for storage data in this milestone.
+
 ## Requirements on macOS Apple Silicon
 
 Install Apple's Command Line Tools if they are not already present:
@@ -707,6 +733,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
         ├── gic.c
         ├── irq.c
         ├── memory.c
+        ├── virtio.c
         └── uart.c
 ```
 
@@ -724,6 +751,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   permissioned L3 pages, validates representative permissions, and enables
   EL1 MMU translation.
 - `include/nimera/console.h` — the small platform-independent console API.
+- `include/nimera/block.h` — the minimal common sector block-device API.
+- `include/nimera/virtio.h` — the QEMU platform VirtIO discovery API.
 - `include/nimera/terminal.h` — logical key events, screen controls, runtime
   geometry, and the 80x25 fallback dimensions.
 - `include/nimera/exception.h` — exception initialization and fatal-report API.
@@ -750,6 +779,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `include/nimera/types.h` — the minimal freestanding `u64` type definition.
 - `kernel/console.c` — delegates the common console API to the current UART
   implementation.
+- `kernel/block.c` — registers and dispatches the small generic block-device
+  set; it contains no VirtIO register knowledge.
 - `kernel/terminal.c` — bounded ANSI key decoding, one-shot geometry
   detection, fallback, and pending input; it does not access PL011 directly.
 - `kernel/exception.c` — prints synchronous-exception diagnostics through the
@@ -793,6 +824,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `virt`; TX is polling, while RX drains into the fixed interrupt-side ring and
   wakes the blocked console consumer. It also exposes nonblocking access to
   already-buffered bytes for terminal sequence lookahead.
+- `platform/qemu-virt/virtio.c` — bounded DTB discovery and the synchronous
+  modern VirtIO block backend; it is not a filesystem driver.
 - `platform/qemu-virt/irq.c` — minimal DTB discovery of the GICv2 MMIO ranges
   and the architected timer PPI.
 - `platform/qemu-virt/gic.c` — minimal one-CPU GICv2 setup, acknowledge, and
@@ -809,7 +842,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `run-protection`, `run-protection-write`, `run-protection-exec`, `run-irq`,
   `run-uart-irq`, `run-uart-overflow`, `run-sched`, `run-blocking`, `run-vfs`,
   `run-vfs-write`, `run-terminal`, `run-terminal-size`,
-  `run-terminal-size-fallback`, `run-editor`, and `clean`. Test builds use
+  `run-terminal-size-fallback`, `run-editor`, `run-block`, `disk-create`,
+  `disk-reset`, and `clean`. Test builds use
   separate directories so their compile-time paths cannot contaminate `make
   run`.
 - `README.md` — project status, workflow, and design notes.
@@ -859,6 +893,9 @@ This is a freestanding program rather than a hosted application:
   build with the response disabled.
 - `-DNIMERA_EDITOR_TEST=0` keeps the automated editor self-test out of the
   normal shell path; `make run-editor` enables it in `build-editor/`.
+- `-DNIMERA_BLOCK_TEST=0` keeps the disk test out of the normal flow;
+  `make run-block` rebuilds in `build-block/` and attaches the separate raw
+  image.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.

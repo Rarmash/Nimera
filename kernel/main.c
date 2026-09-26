@@ -1,6 +1,7 @@
 // No libc, allocator, or runtime are needed for this milestone.
 
 #include <nimera/console.h>
+#include <nimera/block.h>
 #include <nimera/editor.h>
 #include <nimera/exception.h>
 #include <nimera/format.h>
@@ -15,8 +16,69 @@
 #include <nimera/terminal.h>
 #include <nimera/timer.h>
 #include <nimera/vfs.h>
+#include <nimera/virtio.h>
 
 #define NULL ((void *)0)
+
+#if NIMERA_BLOCK_TEST
+static unsigned char block_test_buffer[512];
+
+static unsigned char block_test_checksum(const unsigned char *data)
+{
+	unsigned char value = 0U;
+	for (unsigned int index = 0U; index < 511U; ++index) {
+		value = (unsigned char)(value ^ data[index]);
+	}
+	return value;
+}
+
+static void block_test(void)
+{
+	const struct block_device *device = block_get(0U);
+	u64 marker_block;
+	static const unsigned char magic[] = {'N','I','M','B','L','K','1','\0'};
+	unsigned int present = 1U;
+
+	console_write("Nimera block test\r\n");
+	console_write("VirtIO DTB nodes: ");
+	format_u64_decimal((u64)virtio_mmio_discover((struct virtio_mmio_info *)0, 0U));
+	console_write("\r\n");
+	if (device == NULL || device->block_size != 512ULL) {
+		panic("VirtIO block device unavailable");
+	}
+	marker_block = device->block_count - 1ULL;
+	console_write("Device: "); console_write(device->name); console_write("\r\nBlocks: ");
+	format_u64_decimal(device->block_count); console_write("\r\n");
+	if (device->block_count > ~0ULL / device->block_size) {
+		panic("block capacity overflows");
+	}
+	console_write("Capacity: ");
+	format_u64_decimal(device->block_count * device->block_size);
+	console_write(" bytes ( ");
+	format_u64_decimal((device->block_count * device->block_size) / (1024ULL * 1024ULL));
+	console_write(" MiB)\r\n");
+	if (block_read(device, marker_block, block_test_buffer) != BLOCK_OK) {
+		panic("block marker read failed");
+	}
+	for (unsigned int index = 0U; index < sizeof(magic); ++index) {
+		if (block_test_buffer[index] != magic[index]) present = 0U;
+	}
+	if (present != 0U && block_test_buffer[510] != 1U) present = 0U;
+	if (present != 0U && block_test_buffer[511] != block_test_checksum(block_test_buffer)) present = 0U;
+	console_write("Persistent marker: "); console_write(present != 0U ? "present\r\n" : "absent\r\n");
+	if (present == 0U) {
+		for (unsigned int index = 0U; index < 512U; ++index) block_test_buffer[index] = 0U;
+		for (unsigned int index = 0U; index < sizeof(magic); ++index) block_test_buffer[index] = magic[index];
+		block_test_buffer[8] = 1U; block_test_buffer[510] = 1U;
+		block_test_buffer[511] = block_test_checksum(block_test_buffer);
+		if (block_write(device, marker_block, block_test_buffer) != BLOCK_OK) panic("block marker write failed");
+		console_write("Marker write: OK\r\n");
+		if (block_read(device, marker_block, block_test_buffer) != BLOCK_OK) panic("block marker reread failed");
+		console_write("Read-back: OK\r\n");
+	}
+	console_write("Block test complete.\r\n");
+}
+#endif
 
 extern int uart_overflow_test(void);
 
@@ -597,6 +659,8 @@ void kernel_main(void)
 	vfs_init();
 	u64 heap_after_filesystem = heap_allocated_bytes();
 	(void)heap_after_filesystem;
+	block_init();
+	(void)virtio_block_init();
 
 #if NIMERA_VFS_TEST
 	vfs_test(heap_before_filesystem);
@@ -604,6 +668,10 @@ void kernel_main(void)
 #endif
 #if NIMERA_VFS_WRITE_TEST
 	vfs_write_test(heap_after_filesystem);
+	return;
+#endif
+#if NIMERA_BLOCK_TEST
+	block_test();
 	return;
 #endif
 #if NIMERA_EDITOR_TEST

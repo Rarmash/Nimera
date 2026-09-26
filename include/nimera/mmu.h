@@ -4,6 +4,7 @@
 #include <nimera/memory.h>
 
 void mmu_init(const struct memory_map *map);
+int mmu_map_device_range(u64 start, u64 size);
 u64 mmu_enabled(void);
 u64 mmu_initial_sctlr(void);
 u64 mmu_current_sctlr(void);

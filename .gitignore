@@ -21,3 +21,5 @@ build-terminal/
 build-terminal-size/
 build-terminal-size-fallback/
 build-editor/
+build-block/
+build-storage/

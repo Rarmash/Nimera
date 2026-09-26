@@ -446,6 +446,19 @@ void mmu_init(const struct memory_map *map)
 	initialized = 1U;
 }
 
+int mmu_map_device_range(u64 start, u64 size)
+{
+	descriptor_t *root;
+
+	if (initialized == 0U || size == 0ULL || size > ~0ULL - start) {
+		return -1;
+	}
+	root = (descriptor_t *)(unsigned long)root_table_address;
+	map_device_range(root, start, size);
+	__asm__ volatile("dsb sy\n\ttlbi vmalle1\n\tdsb sy\n\tisb" ::: "memory");
+	return 0;
+}
+
 u64 mmu_page_table_pages(void)
 {
 	return table_page_count;
