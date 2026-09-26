@@ -1,6 +1,7 @@
 #include <nimera/console.h>
 #include <nimera/format.h>
 #include <nimera/memory.h>
+#include <nimera/pmm.h>
 #include <nimera/shell.h>
 #include <nimera/timer.h>
 #include <nimera/version.h>
@@ -57,6 +58,21 @@ static void shell_memory(void)
 	struct memory_map map = memory_discover();
 
 	memory_print_map(&map);
+	console_write("Page size: ");
+	format_u64_decimal(NIMERA_PAGE_SIZE);
+	console_write(" bytes\r\nManaged pages: ");
+	format_u64_decimal(pmm_total_pages());
+	console_write("\r\nPMM metadata: ");
+	format_u64_decimal(pmm_metadata_pages());
+	console_write(" page(s), ");
+	format_u64_decimal(pmm_bitmap_bytes());
+	console_write(" bytes\r\nFree pages: ");
+	format_u64_decimal(pmm_free_pages());
+	console_write("\r\nAllocated pages: ");
+	format_u64_decimal(pmm_used_pages());
+	console_write("\r\nFree memory: ");
+	format_u64_decimal(pmm_free_pages() * NIMERA_PAGE_SIZE / 1024ULL);
+	console_write(" KiB\r\n");
 }
 
 static void shell_execute(char *line, unsigned int length)

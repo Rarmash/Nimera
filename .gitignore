@@ -3,3 +3,4 @@ build-panic/
 build-timer/
 build-memory/
 build-exception/
+build-pmm/

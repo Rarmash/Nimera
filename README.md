@@ -25,15 +25,15 @@ The current milestone successfully:
 - provides a minimal kernel panic path that reports a reason and halts safely;
 - reads the AArch64 Generic Timer to measure monotonic elapsed time; and
 - discovers the physical RAM region from QEMU's Device Tree Blob;
-- separates physical RAM from clipped/merged reserved ranges and computes
-  usable ranges without an allocator;
+- separates physical RAM from clipped/merged reserved ranges, computes usable
+  ranges, and manages their full 4 KiB pages with a bitmap PMM;
 - installs a minimal AArch64 exception vector table for the current execution
   level; and
 - runs a small built-in kernel shell.
 
-There is currently no libc, allocator, MMU/page-table management, hardware
-IRQ/GIC subsystem, scheduler, filesystem, userspace, or other larger OS
-subsystem.
+There is currently no libc, heap allocator, `malloc`, MMU/page-table
+management, hardware IRQ/GIC subsystem, scheduler, filesystem, userspace, or
+other larger OS subsystem.
 
 ## Boot flow
 
@@ -133,13 +133,16 @@ ranges outside RAM are clipped or ignored conservatively.
 The terms have deliberately narrow meanings here:
 
 - physical memory is the RAM range reported by the machine;
-- reserved memory is RAM Nimera must not hand to a future allocator;
+- reserved memory is RAM Nimera must not hand to the PMM;
 - usable memory is physical RAM after those reservations are subtracted;
-- free memory is not known yet, because no allocator tracks allocations.
+- managed memory is the page-aligned part of usable memory after PMM bitmap
+  metadata pages are removed;
+- allocated memory is managed pages currently marked in use by the PMM; and
+- free memory is managed pages currently available from the PMM.
 
 Usable memory is represented as multiple ranges when reservations split the
-physical range. This is still a description of memory, not page allocation,
-heap management, or MMU setup.
+physical range. The PMM manages only complete 4 KiB pages in those ranges. It
+does not provide a heap, virtual memory, or MMU setup.
 
 The normal terminal starts with:
 
@@ -247,6 +250,23 @@ The test prints physical, reserved, and usable totals, the kernel and DTB
 ranges, and the merged reserved ranges. `build-memory/` is kept separate from
 the ordinary build.
 
+The physical page manager uses a 4096-byte page/frame size. Each managed page
+has one bitmap bit. The bitmap is sized from the actual usable page count and
+is placed at the beginning of the first sufficiently large page-aligned usable
+range. The complete pages occupied by the bitmap are removed from the managed
+set, so the PMM cannot return its own metadata.
+
+To exercise allocation and release directly, use the isolated PMM test:
+
+```sh
+make run-pmm QEMU_MEMORY=128M
+```
+
+The test allocates three distinct aligned pages, frees one, allocates again,
+and prints managed/free/allocated statistics. The PMM returns an explicit
+failure when no page remains; invalid frees and double frees call `panic()`.
+`build-pmm/` is separate from the ordinary build.
+
 To exercise the exception vector with a deliberate undefined instruction, use:
 
 ```sh
@@ -289,6 +309,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │       ├── halt.h
 │       ├── memory.h
 │       ├── panic.h
+│       ├── pmm.h
 │       ├── shell.h
 │       ├── timer.h
 │       ├── types.h
@@ -307,6 +328,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │   ├── main.c
 │   ├── memory.c
 │   ├── panic.c
+│   ├── pmm.c
 │   ├── shell.c
 │   └── timer.c
 └── platform/
@@ -330,6 +352,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `include/nimera/shell.h` — the non-returning built-in shell entry point.
 - `include/nimera/memory.h` — the common physical memory information API.
 - `include/nimera/panic.h` — the non-returning `panic()` API.
+- `include/nimera/pmm.h` — the minimal physical page manager API and 4 KiB
+  page-size constant.
 - `include/nimera/timer.h` — the platform-independent timer API.
 - `include/nimera/version.h` — the source-controlled `Nimera 0.0-dev` version.
 - `include/nimera/types.h` — the minimal freestanding `u64` type definition.
@@ -348,6 +372,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   API; it provides the five built-in commands and basic line editing.
 - `kernel/panic.c` — prints the panic report through Console API and halts in
   a simple `wfe` loop.
+- `kernel/pmm.c` — bitmap physical page manager initialized from the memory
+  map; it has no heap or virtual-memory responsibilities.
 - `kernel/timer.c` — validates timer frequency and exposes frequency, ticks,
   and monotonic milliseconds without architecture instructions.
 - `arch/aarch64/timer.c` — reads `CNTFRQ_EL0` and `CNTPCT_EL0` for the common
@@ -387,9 +413,10 @@ This is a freestanding program rather than a hosted application:
 - `-Iinclude` makes the project's freestanding headers available without
   depending on host or libc headers.
 - `-DNIMERA_PANIC_TEST=0`, `-DNIMERA_TIMER_TEST=0`,
-  `-DNIMERA_MEMORY_TEST=0`, and `-DNIMERA_EXCEPTION_TEST=0` keep the normal
-  build path free of test flows; the dedicated Make targets enable their
-  respective switch in isolated build directories.
+  `-DNIMERA_MEMORY_TEST=0`, `-DNIMERA_EXCEPTION_TEST=0`, and
+  `-DNIMERA_PMM_TEST=0` keep the normal build path free of test flows; the
+  dedicated Make targets enable their respective switch in isolated build
+  directories.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.
