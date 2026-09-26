@@ -1,6 +1,7 @@
 #include <nimera/console.h>
 #include <nimera/format.h>
 #include <nimera/memory.h>
+#include <nimera/mmu.h>
 #include <nimera/pmm.h>
 #include <nimera/shell.h>
 #include <nimera/timer.h>
@@ -72,7 +73,11 @@ static void shell_memory(void)
 	format_u64_decimal(pmm_used_pages());
 	console_write("\r\nFree memory: ");
 	format_u64_decimal(pmm_free_pages() * NIMERA_PAGE_SIZE / 1024ULL);
-	console_write(" KiB\r\n");
+	console_write(" KiB\r\nMMU: ");
+	console_write(mmu_enabled() != 0ULL ? "enabled\r\n" : "disabled\r\n");
+	console_write("Page-table pages: ");
+	format_u64_decimal(mmu_page_table_pages());
+	console_write("\r\n");
 }
 
 static void shell_execute(char *line, unsigned int length)

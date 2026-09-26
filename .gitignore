@@ -5,3 +5,5 @@ build-memory/
 build-exception/
 build-pmm/
 build-heap/
+build-mmu/
+build-mmu-fault/

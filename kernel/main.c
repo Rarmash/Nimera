@@ -5,6 +5,7 @@
 #include <nimera/format.h>
 #include <nimera/heap.h>
 #include <nimera/memory.h>
+#include <nimera/mmu.h>
 #include <nimera/panic.h>
 #include <nimera/pmm.h>
 #include <nimera/shell.h>
@@ -67,7 +68,8 @@ static void heap_test(void)
 	unsigned char *reused;
 	u64 pmm_before = pmm_free_pages();
 
-	console_write("Nimera heap test\r\nMMU: disabled (SCTLR_EL1.M=0)\r\n");
+	console_write("Nimera heap test\r\nMMU: ");
+	console_write(mmu_enabled() != 0ULL ? "enabled\r\n" : "disabled\r\n");
 	console_write("PMM free before heap growth: ");
 	format_u64_decimal(pmm_before);
 	console_write("\r\n");
@@ -129,6 +131,36 @@ static void heap_test(void)
 	console_write(" bytes\r\nHeap reusable: ");
 	format_u64_decimal(heap_reusable_bytes());
 	console_write(" bytes\r\nHeap test complete.\r\n");
+}
+#endif
+
+#if NIMERA_MMU_TEST
+static void mmu_test(void)
+{
+	unsigned char *memory = (unsigned char *)kmalloc(64ULL);
+
+	console_write("Nimera MMU test\r\nSCTLR before: ");
+	format_u64_hex(mmu_initial_sctlr());
+	console_write("\r\nPage tables built: ");
+	format_u64_decimal(mmu_page_table_pages());
+	console_write("\r\nSCTLR after: ");
+	format_u64_hex(mmu_current_sctlr());
+	console_write("\r\nMMU after: ");
+	console_write(mmu_enabled() != 0ULL ? "enabled\r\n" : "disabled\r\n");
+	if (memory == NULL) {
+		panic("MMU RAM access test allocation failed");
+	}
+	for (u64 index = 0ULL; index < 64ULL; ++index) {
+		memory[index] = (unsigned char)(index ^ 0xa5U);
+	}
+	for (u64 index = 0ULL; index < 64ULL; ++index) {
+		if (memory[index] != (unsigned char)(index ^ 0xa5U)) {
+			panic("MMU RAM access test failed");
+		}
+	}
+	console_write("RAM access: OK\r\nUART access: OK\r\n");
+	(void)timer_uptime_ms();
+	console_write("Timer access: OK\r\nMMU test complete.\r\n");
 }
 #endif
 
@@ -203,6 +235,12 @@ void kernel_main(void)
 
 	struct memory_map map = memory_discover();
 	pmm_init(&map);
+
+#if NIMERA_MMU_TEST
+	console_write("MMU before: ");
+	console_write(mmu_enabled() != 0ULL ? "enabled\r\n" : "disabled\r\n");
+#endif
+	mmu_init(&map);
 	heap_init();
 
 #if NIMERA_MEMORY_TEST
@@ -222,6 +260,16 @@ void kernel_main(void)
 	return;
 #endif
 
+#if NIMERA_MMU_FAULT_TEST
+	console_write("Nimera MMU fault test\r\n");
+	mmu_fault_test();
+#endif
+
+#if NIMERA_MMU_TEST
+	mmu_test();
+	return;
+#endif
+
 #if NIMERA_EXCEPTION_TEST
 	console_write("Nimera exception test\r\nCurrentEL: ");
 	format_u64_decimal(exception_current_el());
@@ -230,6 +278,7 @@ void kernel_main(void)
 #endif
 
 	console_write("Nimera booting...\r\n");
+	console_write("MMU: enabled\r\n");
 	console_write("kernel: starting shell\r\n");
 	shell_run();
 }

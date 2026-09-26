@@ -15,6 +15,8 @@ MEMORY_TEST ?= 0
 EXCEPTION_TEST ?= 0
 PMM_TEST ?= 0
 HEAP_TEST ?= 0
+MMU_TEST ?= 0
+MMU_FAULT_TEST ?= 0
 QEMU_MEMORY ?= 128M
 
 CFLAGS := \
@@ -36,7 +38,9 @@ CFLAGS := \
 	-DNIMERA_MEMORY_TEST=$(MEMORY_TEST) \
 	-DNIMERA_EXCEPTION_TEST=$(EXCEPTION_TEST) \
 	-DNIMERA_PMM_TEST=$(PMM_TEST) \
-	-DNIMERA_HEAP_TEST=$(HEAP_TEST)
+	-DNIMERA_HEAP_TEST=$(HEAP_TEST) \
+	-DNIMERA_MMU_TEST=$(MMU_TEST) \
+	-DNIMERA_MMU_FAULT_TEST=$(MMU_FAULT_TEST)
 
 LDFLAGS := \
 	-T linker.ld \
@@ -47,7 +51,7 @@ LDFLAGS := \
 
 OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/exception-vector.o $(BUILD_DIR)/halt.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/exception.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/mmu.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/qemu-memory.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/heap.o $(BUILD_DIR)/format.o $(BUILD_DIR)/shell.o $(BUILD_DIR)/uart.o $(BUILD_DIR)/arch-exception.o
 
-.PHONY: build run run-panic run-timer run-memory run-exception run-pmm clean
+.PHONY: build run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault clean
 
 build: $(ELF)
 
@@ -63,7 +67,7 @@ $(BUILD_DIR)/exception-vector.o: arch/aarch64/exception.S | $(BUILD_DIR)/.dir
 $(BUILD_DIR)/halt.o: arch/aarch64/halt.S | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/main.o: kernel/main.c include/nimera/exception.h include/nimera/format.h include/nimera/heap.h include/nimera/memory.h include/nimera/panic.h include/nimera/pmm.h include/nimera/shell.h include/nimera/timer.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/main.o: kernel/main.c include/nimera/exception.h include/nimera/format.h include/nimera/heap.h include/nimera/memory.h include/nimera/mmu.h include/nimera/panic.h include/nimera/pmm.h include/nimera/shell.h include/nimera/timer.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/console.o: kernel/console.c include/nimera/console.h | $(BUILD_DIR)/.dir
@@ -81,7 +85,7 @@ $(BUILD_DIR)/timer.o: kernel/timer.c include/nimera/panic.h include/nimera/timer
 $(BUILD_DIR)/arch-timer.o: arch/aarch64/timer.c include/nimera/types.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/mmu.o: arch/aarch64/mmu.c include/nimera/types.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/mmu.o: arch/aarch64/mmu.c include/nimera/memory.h include/nimera/mmu.h include/nimera/panic.h include/nimera/pmm.h include/nimera/types.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/arch-exception.o: arch/aarch64/exception.c arch/aarch64/exception.S include/nimera/exception.h include/nimera/types.h | $(BUILD_DIR)/.dir
@@ -102,7 +106,7 @@ $(BUILD_DIR)/heap.o: kernel/heap.c include/nimera/heap.h include/nimera/panic.h 
 $(BUILD_DIR)/format.o: kernel/format.c include/nimera/console.h include/nimera/format.h include/nimera/types.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/shell.o: kernel/shell.c include/nimera/console.h include/nimera/format.h include/nimera/heap.h include/nimera/memory.h include/nimera/pmm.h include/nimera/shell.h include/nimera/timer.h include/nimera/version.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/shell.o: kernel/shell.c include/nimera/console.h include/nimera/format.h include/nimera/heap.h include/nimera/memory.h include/nimera/mmu.h include/nimera/pmm.h include/nimera/shell.h include/nimera/timer.h include/nimera/version.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/uart.o: platform/qemu-virt/uart.c | $(BUILD_DIR)/.dir
@@ -112,7 +116,7 @@ $(BUILD_DIR)/.dir:
 	mkdir -p $@
 
 run:
-	$(MAKE) BUILD_DIR=build PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 build
+	$(MAKE) BUILD_DIR=build PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 build
 	$(QEMU) \
 		-machine virt \
 		-cpu cortex-a72 \
@@ -122,7 +126,7 @@ run:
 		-device loader,file=build/baremetal-aarch64.elf,cpu-num=0
 
 run-panic:
-	$(MAKE) BUILD_DIR=build-panic PANIC_TEST=1 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 build
+	$(MAKE) BUILD_DIR=build-panic PANIC_TEST=1 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 build
 	$(QEMU) \
 		-machine virt \
 		-cpu cortex-a72 \
@@ -132,7 +136,7 @@ run-panic:
 		-device loader,file=build-panic/baremetal-aarch64.elf,cpu-num=0
 
 run-timer:
-	$(MAKE) BUILD_DIR=build-timer PANIC_TEST=0 TIMER_TEST=1 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 build
+	$(MAKE) BUILD_DIR=build-timer PANIC_TEST=0 TIMER_TEST=1 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 build
 	$(QEMU) \
 		-machine virt \
 		-cpu cortex-a72 \
@@ -142,7 +146,7 @@ run-timer:
 		-device loader,file=build-timer/baremetal-aarch64.elf,cpu-num=0
 
 run-memory:
-	$(MAKE) BUILD_DIR=build-memory PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=1 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 build
+	$(MAKE) BUILD_DIR=build-memory PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=1 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 build
 	$(QEMU) \
 		-machine virt \
 		-m $(QEMU_MEMORY) \
@@ -153,7 +157,7 @@ run-memory:
 		-device loader,file=build-memory/baremetal-aarch64.elf,cpu-num=0
 
 run-exception:
-	$(MAKE) BUILD_DIR=build-exception PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=1 PMM_TEST=0 HEAP_TEST=0 build
+	$(MAKE) BUILD_DIR=build-exception PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=1 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 build
 	$(QEMU) \
 		-machine virt \
 		-cpu cortex-a72 \
@@ -163,7 +167,7 @@ run-exception:
 		-device loader,file=build-exception/baremetal-aarch64.elf,cpu-num=0
 
 run-pmm:
-	$(MAKE) BUILD_DIR=build-pmm PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=1 HEAP_TEST=0 build
+	$(MAKE) BUILD_DIR=build-pmm PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=1 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 build
 	$(QEMU) \
 		-machine virt \
 		-m $(QEMU_MEMORY) \
@@ -173,8 +177,30 @@ run-pmm:
 		-serial stdio \
 		-device loader,file=build-pmm/baremetal-aarch64.elf,cpu-num=0
 
+run-mmu:
+	$(MAKE) BUILD_DIR=build-mmu PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=1 MMU_FAULT_TEST=0 build
+	$(QEMU) \
+		-machine virt \
+		-m $(QEMU_MEMORY) \
+		-cpu cortex-a72 \
+		-nographic \
+		-monitor none \
+		-serial stdio \
+		-device loader,file=build-mmu/baremetal-aarch64.elf,cpu-num=0
+
+run-mmu-fault:
+	$(MAKE) BUILD_DIR=build-mmu-fault PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=1 build
+	$(QEMU) \
+		-machine virt \
+		-m $(QEMU_MEMORY) \
+		-cpu cortex-a72 \
+		-nographic \
+		-monitor none \
+		-serial stdio \
+		-device loader,file=build-mmu-fault/baremetal-aarch64.elf,cpu-num=0
+
 run-heap:
-	$(MAKE) BUILD_DIR=build-heap PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=1 build
+	$(MAKE) BUILD_DIR=build-heap PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=1 MMU_TEST=0 MMU_FAULT_TEST=0 build
 	$(QEMU) \
 		-machine virt \
 		-m $(QEMU_MEMORY) \
@@ -185,4 +211,4 @@ run-heap:
 		-device loader,file=build-heap/baremetal-aarch64.elf,cpu-num=0
 
 clean:
-	rm -rf build build-panic build-timer build-memory build-exception build-pmm build-heap
+	rm -rf build build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault

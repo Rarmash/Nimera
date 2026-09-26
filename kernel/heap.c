@@ -20,8 +20,6 @@ struct heap_block {
 _Static_assert(sizeof(struct heap_block) % HEAP_ALIGNMENT == 0,
 	       "heap metadata must preserve 16-byte alignment");
 
-extern u64 arch_mmu_enabled(void);
-
 static struct heap_block *heap_head;
 static u64 reserved_bytes;
 static u64 allocated_bytes;
@@ -95,9 +93,6 @@ static int add_page(void)
 
 void heap_init(void)
 {
-	if (arch_mmu_enabled() != 0ULL) {
-		panic("kernel heap requires MMU disabled");
-	}
 	if (initialized != 0U) {
 		panic("heap initialized twice");
 	}

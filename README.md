@@ -29,13 +29,16 @@ The current milestone successfully:
   ranges, and manages their full 4 KiB pages with a bitmap PMM;
 - provides a small kernel heap layered on PMM-backed pages with aligned
   first-fit blocks, splitting, and local coalescing;
+- enables a minimal EL1 AArch64 stage-1 MMU with identity-mapped RAM and the
+  PL011 UART;
 - installs a minimal AArch64 exception vector table for the current execution
   level; and
 - runs a small built-in kernel shell.
 
-There is currently no libc, `malloc/free`, MMU/page-table management, hardware
-IRQ/GIC subsystem, scheduler, filesystem, userspace, or other larger OS
-subsystem.
+There is currently no libc, `malloc/free`, hardware IRQ/GIC subsystem,
+scheduler, filesystem, userspace, or other larger OS subsystem. The MMU is
+enabled after early initialization, but this is not yet a general virtual
+memory manager.
 
 ## Boot flow
 
@@ -59,8 +62,9 @@ The entry point is `_start` in `arch/aarch64/boot.S`:
 3. It calls `exception_init()`, which reads `CurrentEL` and installs the
    matching `VBAR_ELx` vector base.
 4. It calls `kernel_main()` in `kernel/main.c`.
-5. `kernel_main()` initializes the timer, prints the boot messages, and starts
-   the built-in shell.
+5. `kernel_main()` initializes the timer, discovers the memory map, initializes
+   the PMM, builds identity page tables, enables the MMU, and initializes the
+   heap.
 6. The current console implementation delegates to the QEMU `virt` PL011
    driver, which writes output to the data register at `0x09000000` and polls
    input status.
@@ -144,15 +148,36 @@ The terms have deliberately narrow meanings here:
 
 Usable memory is represented as multiple ranges when reservations split the
 physical range. The PMM manages only complete 4 KiB pages in those ranges. It
-does not provide a heap, virtual memory, or MMU setup.
+does not provide a heap or general virtual-memory manager.
 
 The kernel heap is a separate layer above PMM. PMM manages fixed 4 KiB physical
 pages, while the heap returns smaller aligned blocks such as 1, 32, or 1000
 bytes. When the heap has no suitable block, it obtains another page from PMM.
-The current heap uses identity physical pointers because the MMU is disabled;
-this was checked through `SCTLR_EL1.M` at initialization. `kfree()` makes a
-block reusable inside the heap, but completely unused heap pages are not yet
+The current heap uses identity-mapped pointers: the virtual address numerically
+equals the physical address, even though the MMU is now enabled. `kfree()` makes
+a block reusable inside the heap, but completely unused heap pages are not yet
 returned to PMM.
+
+## Minimal MMU bring-up
+
+After PMM initialization, `arch/aarch64/mmu.c` allocates its own 4 KiB page
+tables from PMM, not from the heap. It maps the discovered physical RAM using
+2 MiB blocks where possible, uses 4 KiB mappings at edges, and maps the PL011
+UART page at `0x09000000` as Device-nGnRnE memory. RAM is described as Normal
+write-back memory because RAM and device registers have different ordering and
+caching rules.
+
+The mapping is identity-based: an access to `0x40000000` still reaches
+physical `0x40000000`, so this milestone does not need address relocation. The
+MMU uses TTBR0 only; there is no high-half mapping, TTBR1 address space,
+userspace address space, demand paging, or general virtual-memory allocator.
+`MAIR_EL1` assigns index 0 to Normal write-back RAM and index 1 to Device
+nGnRnE. `TCR_EL1` selects 4 KiB granules and a 48-bit TTBR0 address space;
+`TTBR1` walks are disabled. The setup uses barriers and invalidates stale
+translation state before changing `SCTLR_EL1`. The original `SCTLR_EL1` value
+is preserved and only its M bit is changed to enable translation. The MMU test verifies RAM, UART, and timer access, while
+`make run-mmu-fault` deliberately accesses an unmapped address to exercise the
+existing exception path.
 
 The normal terminal starts with:
 
@@ -299,6 +324,17 @@ This builds an isolated image in `build-exception/` with
 `EXCEPTION_TEST=1`. It prints the verified execution level and minimal
 synchronous-exception diagnostics, then halts without returning to the shell.
 
+To exercise the identity-mapped MMU, use:
+
+```sh
+make run-mmu QEMU_MEMORY=128M
+```
+
+This builds an isolated image in `build-mmu/`, reports the initial and final
+`SCTLR_EL1`, page-table count, and basic RAM/UART/timer accesses. To verify the
+negative path, use `make run-mmu-fault`; the resulting translation fault is
+reported by the existing exception path and the CPU halts.
+
 The ordinary `make run` starts the built-in kernel shell. Its line buffer is a
 fixed 128-byte array: printable ASCII is echoed into it, Enter executes the
 line, and Backspace removes the previous character. Input beyond the buffer is
@@ -331,6 +367,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │       ├── halt.h
 │       ├── heap.h
 │       ├── memory.h
+│       ├── mmu.h
 │       ├── panic.h
 │       ├── pmm.h
 │       ├── shell.h
@@ -369,8 +406,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `arch/aarch64/exception.c` — reads `CurrentEL`, installs `VBAR_EL1` or
   `VBAR_EL2`, and contains the deliberate exception-test instruction.
 - `arch/aarch64/halt.S` — the small `wfe`-based `cpu_halt()` primitive.
-- `arch/aarch64/mmu.c` — reads `SCTLR_EL1.M` to verify the current MMU state;
-  it does not enable or configure the MMU.
+- `arch/aarch64/mmu.c` — builds minimal identity page tables from PMM, maps
+  Normal RAM and the Device-nGnRnE PL011 page, and enables EL1 MMU translation.
 - `include/nimera/console.h` — the small platform-independent console API.
 - `include/nimera/exception.h` — exception initialization and fatal-report API.
 - `include/nimera/format.h` — minimal unsigned decimal and hexadecimal output
@@ -379,6 +416,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `include/nimera/heap.h` — the kernel heap API and heap statistics.
 - `include/nimera/shell.h` — the non-returning built-in shell entry point.
 - `include/nimera/memory.h` — the common physical memory information API.
+- `include/nimera/mmu.h` — the small MMU state, initialization, and test API.
 - `include/nimera/panic.h` — the non-returning `panic()` API.
 - `include/nimera/pmm.h` — the minimal physical page manager API and 4 KiB
   page-size constant.
@@ -413,14 +451,13 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   does not implement an allocator.
 - `platform/qemu-virt/uart.c` — minimal PL011 MMIO input and output for QEMU
   `virt`.
-- `arch/aarch64/mmu.c` — reads `SCTLR_EL1.M` to verify the current MMU state;
-  it does not enable or configure the MMU.
 - `linker.ld` — defines `_start`, the fixed image address, ELF sections,
   `__kernel_start`/`__kernel_end`, and a 16 KiB private stack in `NOLOAD`
   `.bss`.
 - `Makefile` — builds the freestanding objects and links them directly with
   LLD; provides `build`, `run`, `run-panic`, `run-timer`, `run-memory`,
-  `run-pmm`, `run-heap`, `run-exception`, and `clean`.
+  `run-pmm`, `run-heap`, `run-exception`, `run-mmu`, `run-mmu-fault`, and
+  `clean`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -446,9 +483,10 @@ This is a freestanding program rather than a hosted application:
   depending on host or libc headers.
 - `-DNIMERA_PANIC_TEST=0`, `-DNIMERA_TIMER_TEST=0`,
   `-DNIMERA_MEMORY_TEST=0`, `-DNIMERA_EXCEPTION_TEST=0`,
-  `-DNIMERA_PMM_TEST=0`, and `-DNIMERA_HEAP_TEST=0` keep the normal build path
-  free of test flows; the dedicated Make targets enable their respective
-  switch in isolated build directories.
+  `-DNIMERA_PMM_TEST=0`, `-DNIMERA_HEAP_TEST=0`, `-DNIMERA_MMU_TEST=0`, and
+  `-DNIMERA_MMU_FAULT_TEST=0` keep the normal build path free of test flows;
+  the dedicated Make targets enable their respective switch in isolated build
+  directories.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.
