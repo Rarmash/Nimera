@@ -21,7 +21,8 @@ The current milestone successfully:
 - enters `kernel_main()`;
 - routes kernel I/O through a minimal platform-independent console API;
 - writes boot and shell output through QEMU `virt`'s PL011 UART;
-- accepts polling UART input and echoes printable input while editing a line;
+- accepts interrupt-driven UART input and echoes printable input while editing
+  a line;
 - provides a minimal kernel panic path that reports a reason and halts safely;
 - reads the AArch64 Generic Timer to measure monotonic elapsed time; and
 - discovers the physical RAM region from QEMU's Device Tree Blob;
@@ -37,10 +38,12 @@ The current milestone successfully:
   level; and
 - discovers the QEMU `virt` GICv2 and handles the EL1 Generic Timer through a
   real hardware IRQ; and
+- receives PL011 UART input through a GIC-delivered RX interrupt and fixed ring
+  buffer while retaining polling TX; and
 - runs a small built-in kernel shell.
 
 There is currently no libc, `malloc/free`, scheduler, filesystem, userspace,
-UART IRQ path, interrupt-driven console, or other larger OS subsystem. The MMU
+UART TX interrupt path, or other larger OS subsystem. The MMU
 is enabled after early initialization, but this is not yet a general virtual
 memory manager.
 
@@ -69,14 +72,15 @@ The entry point is `_start` in `arch/aarch64/boot.S`:
 5. `kernel_main()` initializes the timer, discovers the memory map, initializes
    the PMM, builds identity page tables, enables the MMU, and initializes the
    heap.
-6. The current console implementation delegates to the QEMU `virt` PL011
-   driver, which writes output to the data register at `0x09000000` and polls
-   input status.
-7. `irq_init()` discovers the GICv2 distributor, CPU interface, and architected
-   timer PPI from the DTB, maps the GIC MMIO pages as Device memory, programs a
-   10 Hz absolute-deadline timer, and enables IRQs only after setup.
-8. An IRQ vector stub saves all general-purpose registers, calls the GIC/timer
-   handler, restores the interrupted context, and returns with `eret`.
+6. The console delegates output to PL011 TX polling; its input is filled by
+   the PL011 RX IRQ into a fixed software ring buffer.
+7. `irq_init()` discovers the GICv2 distributor, CPU interface, PL011 range,
+   UART SPI, and architected timer PPI from the DTB, maps the MMIO pages as
+   Device memory, programs a 10 Hz absolute-deadline timer, and enables IRQs
+   only after setup.
+8. An IRQ vector stub saves all general-purpose registers, dispatches the GIC
+   timer or UART interrupt, calls the relevant handler, and then returns with
+   `eret`.
 9. The shell reads input through the Console API, collects one fixed-size line,
    parses one of its built-in commands, and prints the next prompt.
 
@@ -87,7 +91,8 @@ perform an EL2-to-EL1 transition or assume one is needed.
 The vector table is a fixed, 2048-byte-aligned AArch64 table. Its synchronous,
 IRQ, FIQ, and SError slots enter small assembly stubs. Synchronous exceptions
 are reported diagnostically. The IRQ slot saves all general-purpose registers,
-calls the minimal GICv2/timer handler, restores them, and returns with `eret`;
+calls the minimal GICv2/timer/UART handler, restores them, and returns with
+`eret`;
 FIQ and SError still use the fatal path.
 
 For a synchronous exception, `ESR_EL1` identifies the reason, `ELR_EL1` is the
@@ -100,8 +105,11 @@ The shell is started directly by the kernel. It is not a user process and does
 not depend on a filesystem, current working directory, userspace, or external
 programs.
 
-The input path is intentionally polling-based. It has no interrupts, history,
-autocomplete, cursor movement, shell scripting, or command registry.
+The input path is interrupt-driven only at the UART receive boundary. The
+consumer waits on a small fixed ring buffer with `wfe`; the UART IRQ handler
+drains the PL011 FIFO and wakes it with `sev`. There is no history,
+autocomplete, cursor movement, shell scripting, or command registry. TX still
+polls PL011 readiness.
 
 The panic and exception paths share a small architecture-specific `cpu_halt()`
 primitive. `panic()` writes a fatal message and reason through the common
@@ -131,8 +139,8 @@ returning an uninitialized value.
 The current QEMU `virt,gic-version=2` machine exposes a GICv2. The platform
 DTB parser discovers the GIC distributor and CPU-interface MMIO ranges and the
 non-secure EL1 physical timer PPI; these values are not guessed in the driver.
-`arch/aarch64/mmu.c` maps both GIC ranges as Device-nGnRnE, read/write,
-non-executable memory before enabling the MMU.
+`arch/aarch64/mmu.c` maps the discovered UART and both GIC ranges as
+Device-nGnRnE, read/write, non-executable memory before enabling the MMU.
 
 After setup, the kernel clears the AArch64 `DAIF.I` IRQ mask, programs
 `CNTP_CVAL_EL0` for an absolute 10 Hz deadline, enables the timer PPI, and
@@ -147,11 +155,40 @@ the counter, and then reports the observed count. The normal shell's `ticks`
 command reads the same count. This is an interrupt demonstration, not a
 scheduler or a general interrupt framework.
 
+## PL011 receive IRQ
+
+The current QEMU DTB describes PL011 as `compatible = "arm,pl011"` with
+`reg = <0 0x9000000 0 0x1000>` and `interrupts = <0 1 4>`. In the GIC binding,
+type `0` means SPI, raw interrupt number `1` becomes GIC INTID `32 + 1 = 33`,
+and flag `4` means level-high. Nimera discovers these fields; it does not
+hardcode UART INTID 33.
+
+The driver enables PL011 `IMSC` bits RX (`bit 4`) and receive-timeout RT
+(`bit 6`). RT is useful when a short input burst does not reach the FIFO
+threshold. The handler checks `MIS` (`0x40`), drains `DR` (`0x00`) until
+`FR.RXFE` (`bit 4`) says the FIFO is empty, and acknowledges RX/RT through
+`ICR` (`0x44`). It never prints characters from interrupt context.
+
+Received bytes enter a 256-byte storage array with volatile `head` and `tail`
+indices. One slot distinguishes full from empty, so 255 bytes can be pending.
+On overflow the newest byte is dropped and a counter is incremented; unread
+bytes are never overwritten. The producer publishes the byte before `head`,
+and the consumer advances `tail` after reading it, with compiler barriers for
+the current single-core interrupt model. `volatile` controls compiler memory
+accesses; it is not a universal SMP synchronization primitive.
+
+`console_getc()` no longer reads PL011 registers or busy-spins. It checks the
+software queue and executes `wfe` while empty. The IRQ handler executes `sev`
+after publishing data. If the IRQ arrives between the empty check and `wfe`,
+the event remains pending and `wfe` returns immediately, so the wait does not
+depend on the periodic timer IRQ.
+
 ## Physical memory discovery
 
 QEMU's Device Tree Blob (DTB) is a small structured description of the virtual
 machine: it tells software which devices exist and which physical memory
-regions are present. With the current `-machine virt` and generic-loader boot
+regions are present. With the current `-machine virt,gic-version=2` and
+generic-loader boot
 command, QEMU places the DTB at `0x40000000`; this was verified directly when
 QEMU reported the DTB occupying `0x40000000..0x40100000` while diagnosing the
 ELF load address. The kernel image starts at `0x40100000`, after that DTB area.
@@ -233,8 +270,9 @@ kernel: starting shell
 nimera $
 ```
 
-The built-in commands are `help`, `echo`, `uptime`, `ticks`, `mem`, and
-`version`. `ticks` reports the number of handled EL1 timer IRQs.
+The built-in commands are `help`, `echo`, `uptime`, `ticks`, `irqs`, `mem`, and
+`version`. `ticks` reports the number of handled EL1 timer IRQs, while `irqs`
+also reports UART RX IRQ and dropped-byte counters.
 They are compiled into the kernel; there is no filesystem, current working
 directory, userspace, or external program execution.
 
@@ -340,6 +378,33 @@ IRQs enabled
 Timer IRQ ticks: 5
 IRQ test complete.
 ```
+
+To exercise interrupt-driven PL011 input, use:
+
+```sh
+make run-uart-irq QEMU_MEMORY=128M
+```
+
+Type five characters, without requiring Enter. The isolated image reports the
+DTB-derived UART base and INTID, then shows the bytes that travelled through
+the IRQ handler and ring buffer:
+
+```text
+Nimera UART IRQ test
+UART base: 0x9000000
+UART INTID: 33
+RX IRQ enabled
+Type 5 characters:
+
+Received via IRQ: abcde
+UART RX IRQs: 5
+Dropped bytes: 0
+UART IRQ test complete.
+```
+
+The controlled overflow check is available with `make run-uart-overflow`; it
+fills the ring without touching PL011 and verifies that unread data is kept and
+new bytes are dropped and counted.
 
 To exercise physical memory discovery, use an isolated test image and choose
 QEMU's RAM size:
@@ -542,13 +607,13 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   physical memory node, DTB reservations, kernel range, and usable gaps; it
   does not implement an allocator.
 - `platform/qemu-virt/uart.c` — minimal PL011 MMIO input and output for QEMU
-  `virt`.
+  `virt`; TX is polling, while RX drains into the fixed interrupt-side ring.
 - `platform/qemu-virt/irq.c` — minimal DTB discovery of the GICv2 MMIO ranges
   and the architected timer PPI.
 - `platform/qemu-virt/gic.c` — minimal one-CPU GICv2 setup, acknowledge, and
   end-of-interrupt operations.
 - `kernel/irq.c` — common timer IRQ counter and dispatch path, separate from
-  GIC and PL011 details.
+  GIC and PL011 details; it dispatches the timer and UART INTIDs explicitly.
 - `linker.ld` — defines `_start`, the fixed image address, ELF sections,
   `__kernel_start`/`__kernel_end`, page-aligned section boundaries, and a 16
   KiB private stack in `NOLOAD` `.bss`.
@@ -556,7 +621,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   LLD; provides `build`, `run`, `run-panic`, `run-timer`, `run-memory`,
   `run-pmm`, `run-heap`, `run-exception`, `run-mmu`, `run-mmu-fault`,
   `run-protection`, `run-protection-write`, `run-protection-exec`, `run-irq`,
-  and `clean`.
+  `run-uart-irq`, `run-uart-overflow`, and `clean`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -586,7 +651,8 @@ This is a freestanding program rather than a hosted application:
   `-DNIMERA_MMU_FAULT_TEST=0`, the three protection-test defines, and
   `-DNIMERA_IRQ_TEST=0` keep the normal build path free of test flows;
   dedicated Make targets enable their respective switch in isolated build
-  directories.
+  directories. `NIMERA_UART_IRQ_TEST=0` and `NIMERA_UART_OVERFLOW_TEST=0`
+  similarly keep UART-specific test paths out of the normal image.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.

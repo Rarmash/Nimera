@@ -14,8 +14,54 @@
 
 #define NULL ((void *)0)
 
+extern int uart_overflow_test(void);
+
 #if NIMERA_PROTECTION_TEST
 static volatile u64 protection_data = 0x4e696d657261ULL;
+#endif
+
+#if NIMERA_UART_IRQ_TEST
+static void uart_irq_test(void)
+{
+	struct irq_platform_info info = irq_platform_discover();
+	char received[6];
+	unsigned int index;
+
+	console_write("Nimera UART IRQ test\r\nUART base: ");
+	format_u64_hex(info.uart_base);
+	console_write("\r\nUART INTID: ");
+	format_u64_decimal(info.uart_intid);
+	console_write("\r\n");
+	irq_init();
+	irq_enable();
+	console_write("RX IRQ enabled\r\nType 5 characters:\r\n");
+	for (index = 0U; index < 5U; ++index) {
+		received[index] = console_getc();
+	}
+	received[5] = '\0';
+	irq_disable();
+	arch_timer_irq_stop();
+	console_write("\r\nReceived via IRQ: ");
+	console_write(received);
+	console_write("\r\nUART RX IRQs: ");
+	format_u64_decimal(irq_uart_count());
+	console_write("\r\nDropped bytes: ");
+	format_u64_decimal(irq_uart_dropped_bytes());
+	console_write("\r\nUART IRQ test complete.\r\n");
+}
+#endif
+
+#if NIMERA_UART_OVERFLOW_TEST
+static void uart_ring_overflow_test(void)
+{
+	console_write("Nimera UART ring overflow test\r\n");
+	if (uart_overflow_test() != 0) {
+		panic("UART ring overflow test failed");
+	}
+	console_write("Unread bytes preserved: yes\r\nDropped bytes: ");
+	format_u64_decimal(irq_uart_dropped_bytes());
+	console_write("\r\nUART ring overflow test complete.\r\n");
+}
 #endif
 
 #if NIMERA_IRQ_TEST
@@ -281,6 +327,16 @@ void kernel_main(void)
 #endif
 	irq_init();
 	irq_enable();
+
+#if NIMERA_UART_IRQ_TEST
+	uart_irq_test();
+	return;
+#endif
+
+#if NIMERA_UART_OVERFLOW_TEST
+	uart_ring_overflow_test();
+	return;
+#endif
 
 #if NIMERA_MEMORY_TEST
 	console_write("Nimera memory test\r\n");

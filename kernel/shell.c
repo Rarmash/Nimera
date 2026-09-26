@@ -38,6 +38,7 @@ static void shell_help(void)
 	console_write("  echo [text]\r\n");
 	console_write("  uptime\r\n");
 	console_write("  ticks\r\n");
+	console_write("  irqs\r\n");
 	console_write("  mem\r\n");
 	console_write("  version\r\n");
 }
@@ -60,6 +61,17 @@ static void shell_ticks(void)
 {
 	console_write("Timer IRQ ticks: ");
 	format_u64_decimal(irq_timer_ticks());
+	console_write("\r\n");
+}
+
+static void shell_irqs(void)
+{
+	console_write("Timer IRQs: ");
+	format_u64_decimal(irq_timer_ticks());
+	console_write("\r\nUART RX IRQs: ");
+	format_u64_decimal(irq_uart_count());
+	console_write("\r\nUART dropped bytes: ");
+	format_u64_decimal(irq_uart_dropped_bytes());
 	console_write("\r\n");
 }
 
@@ -122,6 +134,8 @@ static void shell_execute(char *line, unsigned int length)
 		shell_uptime();
 	} else if (text_equals(line, "ticks")) {
 		shell_ticks();
+	} else if (text_equals(line, "irqs")) {
+		shell_irqs();
 	} else if (text_equals(line, "mem")) {
 		shell_memory();
 	} else if (text_equals(line, "version")) {

@@ -7,7 +7,6 @@ typedef unsigned long long descriptor_t;
 
 #define PAGE_TABLE_ENTRIES 512ULL
 #define BLOCK_SIZE 0x200000ULL
-#define UART_PHYSICAL_ADDRESS 0x09000000ULL
 
 #define DESC_VALID 1ULL
 #define DESC_TABLE 2ULL
@@ -44,6 +43,7 @@ typedef unsigned long long descriptor_t;
 
 static u64 table_page_count;
 static u64 l3_table_page_count;
+static u64 uart_physical_address;
 static u64 root_table_address;
 static u64 initial_sctlr_value;
 static unsigned int initialized;
@@ -334,7 +334,7 @@ int mmu_validate_protections(const void *heap_pointer)
 				       descriptor_attributes(normal_rw_nx(0ULL))) != 0 ||
 	    descriptor_matches(root_table_address,
 				       descriptor_attributes(normal_rw_nx(0ULL))) != 0 ||
-	    descriptor_matches(UART_PHYSICAL_ADDRESS,
+	    descriptor_matches(uart_physical_address,
 				       descriptor_attributes(device_rw_nx(0ULL))) != 0) {
 		return -1;
 	}
@@ -399,6 +399,7 @@ static void map_ram(descriptor_t *root, struct memory_range range)
 void mmu_init(const struct memory_map *map)
 {
 	descriptor_t *root;
+	struct irq_platform_info irq_info = irq_platform_discover();
 	u64 initial_sctlr;
 	u64 tcr = TCR_T0SZ | TCR_IRGN0_WBWA | TCR_ORGN0_WBWA |
 		  TCR_SH0_INNER | TCR_TG0_4K | TCR_EPD1 | TCR_T1SZ | TCR_IRGN1_WBWA |
@@ -428,15 +429,11 @@ void mmu_init(const struct memory_map *map)
 	map_permission_range(root, symbol_address(__bss_start),
 				     symbol_address(__stack_top),
 				     descriptor_attributes(normal_rw_nx(0ULL)));
-	map_page(root, UART_PHYSICAL_ADDRESS,
-		 descriptor_attributes(device_rw_nx(UART_PHYSICAL_ADDRESS)));
-	{
-		struct irq_platform_info irq_info = irq_platform_discover();
-
-		map_device_range(root, irq_info.gic_distributor_base,
-				 irq_info.gic_distributor_size);
-		map_device_range(root, irq_info.gic_cpu_base, irq_info.gic_cpu_size);
-	}
+	uart_physical_address = irq_info.uart_base;
+	map_device_range(root, irq_info.uart_base, irq_info.uart_size);
+	map_device_range(root, irq_info.gic_distributor_base,
+			 irq_info.gic_distributor_size);
+	map_device_range(root, irq_info.gic_cpu_base, irq_info.gic_cpu_size);
 
 	__asm__ volatile("msr mair_el1, %0" :: "r"(mair) : "memory");
 	__asm__ volatile("msr tcr_el1, %0" :: "r"(tcr) : "memory");

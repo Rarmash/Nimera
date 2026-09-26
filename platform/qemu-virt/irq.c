@@ -91,7 +91,8 @@ static unsigned int compatible_contains(const u8 *data, u32 length,
 struct irq_platform_info irq_platform_discover(void)
 {
 	const u8 *dtb = (const u8 *)(unsigned long)QEMU_VIRT_DTB_ADDRESS;
-	struct irq_platform_info info = {0ULL, 0ULL, 0ULL, 0ULL, 0ULL};
+	struct irq_platform_info info = {0ULL, 0ULL, 0ULL, 0ULL, 0ULL, 0ULL,
+					0ULL, 0ULL};
 	const u8 *structure;
 	const u8 *structure_end;
 	const u8 *strings;
@@ -103,10 +104,12 @@ struct irq_platform_info irq_platform_discover(void)
 	u32 depth = 0U;
 	u32 gic_depth = 0U;
 	u32 timer_depth = 0U;
+	u32 uart_depth = 0U;
 	u32 address_cells = 0U;
 	u32 size_cells = 0U;
 	unsigned int gic_compatible = 0U;
 	unsigned int timer_compatible = 0U;
+	unsigned int uart_compatible = 0U;
 	unsigned int found_end = 0U;
 
 	if (read_be32(dtb) != 0xd00dfeedU) {
@@ -155,6 +158,9 @@ struct irq_platform_info irq_platform_discover(void)
 			} else if (string_equals(name, "timer")) {
 				timer_depth = depth;
 				timer_compatible = 0U;
+			} else if (name_starts_with(name, length, "pl011@")) {
+				uart_depth = depth;
+				uart_compatible = 0U;
 			}
 			break;
 		}
@@ -174,6 +180,13 @@ struct irq_platform_info irq_platform_discover(void)
 					panic("incomplete timer Device Tree node");
 				}
 				timer_depth = 0U;
+			}
+			if (depth == uart_depth) {
+				if (uart_compatible == 0U || info.uart_size == 0ULL ||
+				    info.uart_intid == 0ULL) {
+					panic("incomplete PL011 Device Tree node");
+				}
+				uart_depth = 0U;
 			}
 			--depth;
 			break;
@@ -239,6 +252,28 @@ struct irq_platform_info irq_platform_discover(void)
 					panic("invalid architected timer interrupts property");
 				}
 				info.timer_intid = 16ULL + (u64)read_be32(value + 16U);
+			} else if (depth == uart_depth &&
+				   string_equals(property_name, "compatible")) {
+				uart_compatible = compatible_contains(value, length, "arm,pl011");
+			} else if (depth == uart_depth &&
+				   string_equals(property_name, "reg")) {
+				if (address_cells == 0U || size_cells == 0U ||
+				    address_cells > 2U || size_cells > 2U ||
+				    length < (address_cells + size_cells) * 4U) {
+					panic("invalid PL011 reg property");
+				}
+				info.uart_base = read_cells(value, address_cells);
+				info.uart_size = read_cells(value + address_cells * 4U,
+							    size_cells);
+			} else if (depth == uart_depth &&
+				   string_equals(property_name, "interrupts")) {
+				/* PL011 uses one GIC specifier: SPI type 0, raw 1, level-high. */
+				if (length < 12U || read_be32(value) != 0U ||
+				    read_be32(value + 4U) == 0U ||
+				    read_be32(value + 8U) != 4U) {
+					panic("invalid PL011 interrupts property");
+				}
+				info.uart_intid = 32ULL + (u64)read_be32(value + 4U);
 			}
 			break;
 		}
@@ -258,8 +293,9 @@ struct irq_platform_info irq_platform_discover(void)
 
 	if (found_end == 0U || info.gic_distributor_size == 0ULL ||
 	    info.gic_cpu_size == 0ULL ||
-	    info.timer_intid == 0ULL) {
-		panic("GICv2 or timer not found in Device Tree");
+	    info.timer_intid == 0ULL || info.uart_base == 0ULL ||
+	    info.uart_size == 0ULL || info.uart_intid == 0ULL) {
+		panic("GICv2, timer, or PL011 not found in Device Tree");
 	}
 	return info;
 }

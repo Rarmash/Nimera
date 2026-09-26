@@ -14,3 +14,8 @@ void arch_wait_for_event(void)
 {
 	__asm__ volatile("wfe" ::: "memory");
 }
+
+void arch_signal_event(void)
+{
+	__asm__ volatile("sev" ::: "memory");
+}

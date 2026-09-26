@@ -5,6 +5,7 @@
 #define GICD_ISENABLER 0x100U
 #define GICD_IPRIORITYR 0x400U
 #define GICD_ICFGR 0xc00U
+#define GICD_ITARGETSR 0x800U
 
 #define GICC_CTLR 0x000U
 #define GICC_PMR 0x004U
@@ -12,7 +13,7 @@
 #define GICC_EOIR 0x010U
 
 #define GIC_SPURIOUS_INTERRUPT 1023ULL
-#define TIMER_PRIORITY 0x80U
+#define INTERRUPT_PRIORITY 0x80U
 
 static volatile unsigned int *gicd;
 static volatile unsigned int *gicc;
@@ -22,24 +23,31 @@ static void write8(volatile unsigned char *address, unsigned char value)
 	*address = value;
 }
 
-static void enable_timer_interrupt(u64 interrupt_id)
+static void enable_interrupt(u64 interrupt_id)
 {
-	volatile unsigned int *enable;
 	volatile unsigned int *configuration;
 	u64 shift;
+	volatile unsigned char *target;
 
 	if (interrupt_id >= 32ULL) {
-		panic("timer interrupt is not a PPI");
+		/* SPI target byte 0 selects CPU0; the DTB describes level-high. */
+		target = (volatile unsigned char *)gicd + GICD_ITARGETSR + interrupt_id;
+		*target = 1U;
+		configuration = gicd + GICD_ICFGR / sizeof(unsigned int) +
+			interrupt_id / 16ULL;
+		shift = (interrupt_id % 16ULL) * 2ULL;
+		*configuration &= ~(1U << (shift + 1ULL));
+	} else {
+		/* The timer PPI is level-high; clear its edge bit. */
+		configuration = gicd + GICD_ICFGR / sizeof(unsigned int) +
+			interrupt_id / 16ULL;
+		shift = (interrupt_id % 16ULL) * 2ULL;
+		*configuration &= ~(1U << (shift + 1ULL));
 	}
-	enable = gicd + GICD_ISENABLER / sizeof(unsigned int);
-	configuration =
-		gicd + GICD_ICFGR / sizeof(unsigned int) + interrupt_id / 16ULL;
-	shift = (interrupt_id % 16ULL) * 2ULL;
-	/* The DTB describes the timer as level-high; clear the edge bit. */
-	*configuration &= ~(1U << (shift + 1ULL));
 	write8((volatile unsigned char *)gicd + GICD_IPRIORITYR + interrupt_id,
-	       TIMER_PRIORITY);
-	*enable |= 1U << interrupt_id;
+	       INTERRUPT_PRIORITY);
+	*(gicd + GICD_ISENABLER / sizeof(unsigned int) + interrupt_id / 32ULL) |=
+		1U << (interrupt_id % 32ULL);
 }
 
 void platform_gic_init(const struct irq_platform_info *info)
@@ -49,7 +57,8 @@ void platform_gic_init(const struct irq_platform_info *info)
 
 	/* Configure the one PPI before enabling either GIC interface. */
 	*gicd = 0U;
-	enable_timer_interrupt(info->timer_intid);
+	enable_interrupt(info->timer_intid);
+	enable_interrupt(info->uart_intid);
 	gicc[GICC_PMR / sizeof(unsigned int)] = 0xffU;
 	gicc[GICC_CTLR / sizeof(unsigned int)] = 1U;
 	gicd[GICD_CTLR / sizeof(unsigned int)] = 1U;

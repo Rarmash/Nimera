@@ -1,37 +1,91 @@
-// QEMU's "virt" machine exposes a PL011-compatible UART at this address.
-// This is a direct MMIO driver: no libc, OS API, or UART runtime is used.
+// QEMU's virt machine exposes a PL011-compatible UART. TX remains polling,
+// while RX is delivered by the UART IRQ into this fixed software queue.
+
+#include <nimera/irq.h>
+#include <nimera/types.h>
 
 typedef unsigned int u32;
 
-#define PL011_BASE 0x09000000UL
-#define UART_DR (*(volatile u32 *)(PL011_BASE + 0x00))
-#define UART_FR (*(volatile u32 *)(PL011_BASE + 0x18))
+#define PL011_DEFAULT_BASE 0x09000000ULL
+#define UART_DR 0x00U
+#define UART_FR 0x18U
+#define UART_IMSC 0x38U
+#define UART_MIS 0x40U
+#define UART_ICR 0x44U
 
 #define UART_FR_RXFE (1U << 4)
 #define UART_FR_TXFF (1U << 5)
+#define UART_INT_RX (1U << 4)
+#define UART_INT_RT (1U << 6)
+
+#define UART_RX_BUFFER_CAPACITY 256U
+
+static u64 uart_base = PL011_DEFAULT_BASE;
+static volatile unsigned char rx_storage[UART_RX_BUFFER_CAPACITY];
+static volatile unsigned int rx_head;
+static volatile unsigned int rx_tail;
+static volatile u64 rx_dropped;
+static volatile u64 rx_irq_count;
+
+static volatile u32 *uart_register(u32 offset)
+{
+	return (volatile u32 *)(unsigned long)(uart_base + (u64)offset);
+}
+
+static void compiler_memory_barrier(void)
+{
+	__asm__ volatile("" ::: "memory");
+}
+
+static void rx_push(unsigned char value)
+{
+	unsigned int next = (rx_head + 1U) % UART_RX_BUFFER_CAPACITY;
+
+	if (next == rx_tail) {
+		/* Keep unread data intact; drop only the newest byte. */
+		++rx_dropped;
+		return;
+	}
+	rx_storage[rx_head] = value;
+	compiler_memory_barrier();
+	rx_head = next;
+}
+
+void uart_init(u64 base)
+{
+	uart_base = base;
+	rx_head = 0U;
+	rx_tail = 0U;
+	rx_dropped = 0ULL;
+	rx_irq_count = 0ULL;
+}
 
 void uart_putc(char c)
 {
-	// TXFF means the transmit FIFO is full. Waiting here prevents a new byte
-	// from being written while PL011 has no room to accept it.
-	while ((UART_FR & UART_FR_TXFF) != 0U) {
-	}
+	volatile u32 *flags = uart_register(UART_FR);
 
-	// DR is the receive/transmit data register. A volatile store makes this
-	// write reach the UART instead of being optimized away.
-	UART_DR = (u32)(unsigned char)c;
+	while ((*flags & UART_FR_TXFF) != 0U) {
+	}
+	*uart_register(UART_DR) = (u32)(unsigned char)c;
 }
 
 char uart_getc(void)
 {
-	// RXFE means the receive FIFO is empty. Polling this hardware state avoids
-	// guessing with a delay and waits until QEMU has supplied an input byte.
-	while ((UART_FR & UART_FR_RXFE) != 0U) {
-	}
+	for (;;) {
+		unsigned int tail = rx_tail;
 
-	// Only the low eight bits of DR contain the received character here; the
-	// upper bits carry PL011 status information on reads.
-	return (char)(UART_DR & 0xffU);
+		if (tail != rx_head) {
+			char value = (char)rx_storage[tail];
+
+			compiler_memory_barrier();
+			rx_tail = (tail + 1U) % UART_RX_BUFFER_CAPACITY;
+			return value;
+		}
+
+		/* SEV in the IRQ handler wakes this WFE. If the IRQ happened just
+		 * before WFE, the event remains pending and WFE returns immediately. */
+		arch_wait_for_event();
+	}
 }
 
 void uart_puts(const char *text)
@@ -39,4 +93,54 @@ void uart_puts(const char *text)
 	while (*text != '\0') {
 		uart_putc(*text++);
 	}
+}
+
+void uart_enable_rx_interrupt(void)
+{
+	/* RX and receive-timeout interrupts cover both immediate and paused input. */
+	*uart_register(UART_IMSC) |= UART_INT_RX | UART_INT_RT;
+}
+
+void uart_handle_irq(void)
+{
+	u32 masked_status = *uart_register(UART_MIS);
+
+	if ((masked_status & (UART_INT_RX | UART_INT_RT)) == 0U) {
+		return;
+	}
+	++rx_irq_count;
+	while ((*uart_register(UART_FR) & UART_FR_RXFE) == 0U) {
+		rx_push((unsigned char)(*uart_register(UART_DR) & 0xffU));
+	}
+	/* ICR acknowledges both sources after the FIFO has been drained. */
+	*uart_register(UART_ICR) = UART_INT_RX | UART_INT_RT;
+	arch_signal_event();
+}
+
+u64 uart_rx_irq_count(void)
+{
+	return rx_irq_count;
+}
+
+u64 uart_dropped_bytes(void)
+{
+	return rx_dropped;
+}
+
+int uart_overflow_test(void)
+{
+	unsigned int index;
+
+	rx_head = 0U;
+	rx_tail = 0U;
+	rx_dropped = 0ULL;
+	for (index = 0U; index < UART_RX_BUFFER_CAPACITY + 10U; ++index) {
+		rx_push((unsigned char)index);
+	}
+	if (rx_head != UART_RX_BUFFER_CAPACITY - 1U || rx_tail != 0U ||
+	    rx_storage[0] != 0U || rx_storage[UART_RX_BUFFER_CAPACITY - 2U] != 254U ||
+	    rx_dropped != 11ULL) {
+		return -1;
+	}
+	return 0;
 }
