@@ -7,35 +7,45 @@ SECTIONS
 	. = 0x40100000;
 	__kernel_start = .;
 
-	.text : ALIGN(16)
+	.text : ALIGN(0x1000)
 	{
+		__text_start = .;
 		KEEP(*(.text.boot))
 		. = ALIGN(2048);
 		KEEP(*(.text.vector))
 		*(.text .text.*)
+		. = ALIGN(0x1000);
+		__text_end = .;
 	}
 
-	.rodata : ALIGN(16)
+	.rodata : ALIGN(0x1000)
 	{
+		__rodata_start = .;
 		*(.rodata .rodata.*)
+		. = ALIGN(0x1000);
+		__rodata_end = .;
 	}
 
-	.data : ALIGN(16)
+	.data : ALIGN(0x1000)
 	{
+		__data_start = .;
 		*(.data .data.*)
+		. = ALIGN(0x1000);
+		__data_end = .;
 	}
 
-	.bss (NOLOAD) : ALIGN(16)
+	.bss (NOLOAD) : ALIGN(0x1000)
 	{
 		__bss_start = .;
 		*(.bss .bss.*)
 		*(COMMON)
+		. = ALIGN(0x1000);
 		__bss_end = .;
 
 		/* Private 16 KiB stack; SP is initialized to its high address. */
-		. = ALIGN(16);
 		__stack_bottom = .;
 		. += 16K;
+		. = ALIGN(0x1000);
 		__stack_top = .;
 	}
 

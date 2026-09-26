@@ -77,7 +77,10 @@ static void shell_memory(void)
 	console_write(mmu_enabled() != 0ULL ? "enabled\r\n" : "disabled\r\n");
 	console_write("Page-table pages: ");
 	format_u64_decimal(mmu_page_table_pages());
-	console_write("\r\n");
+	console_write("\r\nMMU L3 tables: ");
+	format_u64_decimal(mmu_l3_table_pages());
+	console_write("\r\nKernel text: RO+X\r\nKernel rodata: RO+NX\r\n");
+	console_write("Kernel data: RW+NX\r\n");
 }
 
 static void shell_execute(char *line, unsigned int length)

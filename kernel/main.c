@@ -13,6 +13,10 @@
 
 #define NULL ((void *)0)
 
+#if NIMERA_PROTECTION_TEST
+static volatile u64 protection_data = 0x4e696d657261ULL;
+#endif
+
 #if NIMERA_TIMER_TEST
 static void timer_test(void)
 {
@@ -257,6 +261,38 @@ void kernel_main(void)
 
 #if NIMERA_HEAP_TEST
 	heap_test();
+	return;
+#endif
+
+#if NIMERA_PROTECTION_WRITE_TEST
+	console_write("Nimera write-to-text test\r\n");
+	mmu_write_text_test();
+#endif
+
+#if NIMERA_PROTECTION_EXEC_TEST
+	console_write("Nimera execute-from-data test\r\n");
+	mmu_execute_data_test();
+#endif
+
+#if NIMERA_PROTECTION_TEST
+	{
+		void *heap = kmalloc(16ULL);
+
+		if (heap == NULL || protection_data == 0ULL ||
+		    mmu_validate_protections(heap) != 0) {
+			panic("MMU protection validation failed");
+		}
+		console_write("Nimera protection test\r\n");
+		console_write("L3 tables after section splitting: ");
+		format_u64_decimal(mmu_l3_table_pages());
+		console_write("\r\n");
+		console_write(".text: RO + executable\r\n");
+		console_write(".rodata: RO + NX\r\n");
+		console_write(".data: RW + NX\r\n");
+		console_write("heap: RW + NX\r\n");
+		console_write("UART: Device + NX\r\n");
+		console_write("Protection test complete.\r\n");
+	}
 	return;
 #endif
 

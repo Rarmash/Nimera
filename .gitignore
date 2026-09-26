@@ -7,3 +7,6 @@ build-pmm/
 build-heap/
 build-mmu/
 build-mmu-fault/
+build-protection/
+build-protection-write/
+build-protection-exec/

@@ -31,6 +31,8 @@ The current milestone successfully:
   first-fit blocks, splitting, and local coalescing;
 - enables a minimal EL1 AArch64 stage-1 MMU with identity-mapped RAM and the
   PL011 UART;
+- applies initial W^X-style permissions: `.text` is RO+X, `.rodata` is RO+NX,
+  and writable RAM, heap, stack, page tables, and UART are NX;
 - installs a minimal AArch64 exception vector table for the current execution
   level; and
 - runs a small built-in kernel shell.
@@ -179,10 +181,22 @@ is preserved and only its M bit is changed to enable translation. The MMU test v
 `make run-mmu-fault` deliberately accesses an unmapped address to exercise the
 existing exception path.
 
+The protection build creates final permissions before enabling the MMU. The
+linker aligns `.text`, `.rodata`, `.data`, `.bss`, and the stack to 4 KiB
+boundaries and exports their start/end symbols. Only the 2 MiB block containing
+the kernel is split into L3 pages where section permissions differ; the rest
+of RAM remains block-mapped.
+
+R/W/X permissions describe whether a page may be read, written, or executed.
+NX means non-executable and prevents data from being used as code. This small
+W^X-style policy makes `.text` non-writable and writable memory non-executable;
+it is protection for the EL1 kernel, not userspace isolation.
+
 The normal terminal starts with:
 
 ```text
 Nimera booting...
+MMU: enabled
 kernel: starting shell
 nimera $
 ```
@@ -335,6 +349,19 @@ This builds an isolated image in `build-mmu/`, reports the initial and final
 negative path, use `make run-mmu-fault`; the resulting translation fault is
 reported by the existing exception path and the CPU halts.
 
+Protection tests use isolated build directories:
+
+```sh
+make run-protection QEMU_MEMORY=128M
+make run-protection-write QEMU_MEMORY=128M
+make run-protection-exec QEMU_MEMORY=128M
+```
+
+The first validates representative descriptors. The second must report a
+permission Data Abort when writing `.text`; the third must report an
+Instruction Abort when branching to a `ret` instruction stored in writable
+`.data`. Neither test is an invalid-opcode test.
+
 The ordinary `make run` starts the built-in kernel shell. Its line buffer is a
 fixed 128-byte array: printable ASCII is echoed into it, Enter executes the
 line, and Backspace removes the previous character. Input beyond the buffer is
@@ -407,7 +434,9 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `VBAR_EL2`, and contains the deliberate exception-test instruction.
 - `arch/aarch64/halt.S` — the small `wfe`-based `cpu_halt()` primitive.
 - `arch/aarch64/mmu.c` — builds minimal identity page tables from PMM, maps
-  Normal RAM and the Device-nGnRnE PL011 page, and enables EL1 MMU translation.
+  Normal RAM and the Device-nGnRnE PL011 page, splits the kernel block into
+  permissioned L3 pages, validates representative permissions, and enables
+  EL1 MMU translation.
 - `include/nimera/console.h` — the small platform-independent console API.
 - `include/nimera/exception.h` — exception initialization and fatal-report API.
 - `include/nimera/format.h` — minimal unsigned decimal and hexadecimal output
@@ -452,12 +481,12 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `platform/qemu-virt/uart.c` — minimal PL011 MMIO input and output for QEMU
   `virt`.
 - `linker.ld` — defines `_start`, the fixed image address, ELF sections,
-  `__kernel_start`/`__kernel_end`, and a 16 KiB private stack in `NOLOAD`
-  `.bss`.
+  `__kernel_start`/`__kernel_end`, page-aligned section boundaries, and a 16
+  KiB private stack in `NOLOAD` `.bss`.
 - `Makefile` — builds the freestanding objects and links them directly with
   LLD; provides `build`, `run`, `run-panic`, `run-timer`, `run-memory`,
-  `run-pmm`, `run-heap`, `run-exception`, `run-mmu`, `run-mmu-fault`, and
-  `clean`.
+  `run-pmm`, `run-heap`, `run-exception`, `run-mmu`, `run-mmu-fault`,
+  `run-protection`, `run-protection-write`, `run-protection-exec`, and `clean`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -483,10 +512,10 @@ This is a freestanding program rather than a hosted application:
   depending on host or libc headers.
 - `-DNIMERA_PANIC_TEST=0`, `-DNIMERA_TIMER_TEST=0`,
   `-DNIMERA_MEMORY_TEST=0`, `-DNIMERA_EXCEPTION_TEST=0`,
-  `-DNIMERA_PMM_TEST=0`, `-DNIMERA_HEAP_TEST=0`, `-DNIMERA_MMU_TEST=0`, and
-  `-DNIMERA_MMU_FAULT_TEST=0` keep the normal build path free of test flows;
-  the dedicated Make targets enable their respective switch in isolated build
-  directories.
+  `-DNIMERA_PMM_TEST=0`, `-DNIMERA_HEAP_TEST=0`, `-DNIMERA_MMU_TEST=0`,
+  `-DNIMERA_MMU_FAULT_TEST=0`, and the three protection-test defines keep the
+  normal build path free of test flows; dedicated Make targets enable their
+  respective switch in isolated build directories.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.
