@@ -20,11 +20,12 @@ The current milestone successfully:
 - establishes a private initial stack;
 - enters `kernel_main()`;
 - routes kernel I/O through a minimal platform-independent console API;
-- writes `Hello from kernel` through QEMU `virt`'s PL011 UART; and
-- enables polling UART input and echoes each received character;
+- writes boot and shell output through QEMU `virt`'s PL011 UART;
+- accepts polling UART input and echoes printable input while editing a line;
 - provides a minimal kernel panic path that reports a reason and halts safely;
 - reads the AArch64 Generic Timer to measure monotonic elapsed time; and
-- discovers the physical RAM region from QEMU's Device Tree Blob.
+- discovers the physical RAM region from QEMU's Device Tree Blob; and
+- runs a small built-in kernel shell.
 
 There is currently no libc, allocator, interrupt subsystem, scheduler,
 filesystem, userspace, or other larger OS subsystem.
@@ -49,18 +50,20 @@ The entry point is `_start` in `arch/aarch64/boot.S`:
 1. `_start` computes the linker-defined `__stack_top` address.
 2. It moves that address into the AArch64 stack pointer, `sp`.
 3. It calls `kernel_main()` in `kernel/main.c`.
-4. `kernel_main()` uses `console_write()` and `console_getc()` from the common
-   console layer.
+4. `kernel_main()` initializes the timer, prints the boot messages, and starts
+   the built-in shell.
 5. The current console implementation delegates to the QEMU `virt` PL011
    driver, which writes output to the data register at `0x09000000` and polls
    input status.
-6. `kernel_main()` prints the echo-mode message, then waits for input by
-   polling the PL011 receive FIFO state.
-7. Each received character is sent back through the same UART. Enter is
-   normalized to `\r\n` for a clean terminal line.
+6. The shell reads input through the Console API, collects one fixed-size line,
+   parses one of its built-in commands, and prints the next prompt.
 
-The input path is intentionally polling-based. It has no interrupts, ring
-buffer, line editor, shell, or command handling.
+The shell is started directly by the kernel. It is not a user process and does
+not depend on a filesystem, current working directory, userspace, or external
+programs.
+
+The input path is intentionally polling-based. It has no interrupts, history,
+autocomplete, cursor movement, shell scripting, or command registry.
 
 The panic path is separate from the normal echo flow. `panic()` writes a fatal
 message and reason through the common console API, prints `System halted.`, and
@@ -102,15 +105,17 @@ what the machine reports; usable memory would require reserving firmware, DTB,
 and kernel regions, and free memory would additionally require an allocator.
 Nimera does not implement either yet.
 
-The terminal output is:
+The normal terminal starts with:
 
 ```text
-Hello from kernel
-Echo mode enabled. Type characters:
+Nimera booting...
+kernel: starting shell
+nimera $
 ```
 
-After the second line, characters typed into the terminal are echoed one at a
-time. Enter is emitted as `\r\n`.
+The built-in commands are `help`, `echo`, `uptime`, `mem`, and `version`.
+They are compiled into the kernel; there is no filesystem, current working
+directory, userspace, or external program execution.
 
 The common console API is intentionally only three operations:
 `console_putc()`, `console_write()`, and `console_getc()`. It keeps kernel code
@@ -205,6 +210,13 @@ make run-memory QEMU_MEMORY=128M
 The test prints the physical base, byte count, and whole MiB count reported by
 the Device Tree. `build-memory/` is kept separate from the ordinary build.
 
+The ordinary `make run` starts the built-in kernel shell. Its line buffer is a
+fixed 128-byte array: printable ASCII is echoed into it, Enter executes the
+line, and Backspace removes the previous character. Input beyond the buffer is
+ignored safely. Parsing only recognizes the five commands shown above; there
+is no quoting, escaping, piping, redirection, history, or external command
+execution.
+
 `make clean` removes generated objects, the ELF, and the link map:
 
 ```sh
@@ -225,19 +237,24 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 ├── include/
 │   └── nimera/
 │       ├── console.h
+│       ├── format.h
 │       ├── memory.h
 │       ├── panic.h
+│       ├── shell.h
 │       ├── timer.h
-│       └── types.h
+│       ├── types.h
+│       └── version.h
 ├── arch/
 │   └── aarch64/
 │       ├── boot.S
 │       └── timer.c
 ├── kernel/
 │   ├── console.c
+│   ├── format.c
 │   ├── main.c
 │   ├── memory.c
 │   ├── panic.c
+│   ├── shell.c
 │   └── timer.c
 └── platform/
     └── qemu-virt/
@@ -248,16 +265,25 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `arch/aarch64/boot.S` — the only assembly file; installs the initial stack,
   calls C, and provides the fallback loop if C returns.
 - `include/nimera/console.h` — the small platform-independent console API.
+- `include/nimera/format.h` — minimal unsigned decimal and hexadecimal output
+  helpers used where a number must be displayed.
+- `include/nimera/shell.h` — the non-returning built-in shell entry point.
 - `include/nimera/memory.h` — the common physical memory information API.
 - `include/nimera/panic.h` — the non-returning `panic()` API.
 - `include/nimera/timer.h` — the platform-independent timer API.
+- `include/nimera/version.h` — the source-controlled `Nimera 0.0-dev` version.
 - `include/nimera/types.h` — the minimal freestanding `u64` type definition.
 - `kernel/console.c` — delegates the common console API to the current UART
   implementation.
-- `kernel/main.c` — defines `kernel_main()` and the minimal polling echo loop;
-  it does not call UART functions directly.
+- `kernel/main.c` — defines `kernel_main()`, initializes the timer, and starts
+  the shell or one of the isolated runtime tests; it does not call UART
+  functions directly.
 - `kernel/memory.c` — exposes the common memory API through the platform
   discovery implementation.
+- `kernel/format.c` — only the small unsigned decimal/hex output helpers used
+  by shell and memory test; it is not a `printf` implementation.
+- `kernel/shell.c` — fixed-buffer command shell using only the common Console
+  API; it provides the five built-in commands and basic line editing.
 - `kernel/panic.c` — prints the panic report through Console API and halts in
   a simple `wfe` loop.
 - `kernel/timer.c` — validates timer frequency and exposes frequency, ticks,
@@ -270,7 +296,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `virt`.
 - `linker.ld` — defines `_start`, the fixed image address, ELF sections, and a
   16 KiB private stack in `NOLOAD` `.bss`.
-- `Makefile` — builds nine object files and links them directly with LLD;
+- `Makefile` — builds eleven object files and links them directly with LLD;
   provides `build`, `run`, `run-panic`, `run-timer`, `run-memory`, and `clean`.
 - `README.md` — project status, workflow, and design notes.
 
@@ -324,6 +350,6 @@ Nimera aims to:
 - grow incrementally, without pretending to be a complete OS from day one; and
 - become suitable for community contributions as the project matures.
 
-The near-term roadmap is deliberately short:
-
-1. Minimal interactive shell
+The near-term roadmap will be updated as the next subsystem is selected. The
+minimal built-in shell described above is implemented, but it is intentionally
+not a userspace shell or a general command-execution environment.
