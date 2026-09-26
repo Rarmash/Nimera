@@ -58,6 +58,12 @@ static void shell_help(void)
 	console_write("  cd <path>\r\n");
 	console_write("  mkdir <path>\r\n");
 	console_write("  cat <path>\r\n");
+	console_write("  touch <path>\r\n");
+	console_write("  write <path> <text>\r\n");
+	console_write("  append <path> <text>\r\n");
+	console_write("  rm <file>\r\n");
+	console_write("  rmdir <directory>\r\n");
+	console_write("  mv <source> <destination>\r\n");
 }
 
 static void shell_ls(const char *path)
@@ -161,6 +167,130 @@ static void shell_cat(const char *path)
 		console_putc(buffer[index]);
 	}
 	console_write("\r\n");
+}
+
+static unsigned int shell_string_length(const char *text)
+{
+	unsigned int length = 0U;
+
+	while (text[length] != '\0') {
+		++length;
+	}
+	return length;
+}
+
+static int shell_path_and_text(char *argument, char **path, char **text)
+{
+	unsigned int index;
+
+	if (argument == (char *)0 || argument[0] == '\0') {
+		return 0;
+	}
+	for (index = 0U; argument[index] != '\0'; ++index) {
+		if (argument[index] == ' ' || argument[index] == '\t') {
+			argument[index++] = '\0';
+			while (argument[index] == ' ' || argument[index] == '\t') {
+				++index;
+			}
+			*path = argument;
+			*text = &argument[index];
+			return 1;
+		}
+	}
+	*path = argument;
+	*text = &argument[index];
+	return 1;
+}
+
+static int shell_two_paths(char *argument, char **source, char **destination)
+{
+	unsigned int index;
+
+	if (argument == (char *)0 || argument[0] == '\0') {
+		return 0;
+	}
+	*source = argument;
+	for (index = 0U; argument[index] != '\0'; ++index) {
+		if (argument[index] == ' ' || argument[index] == '\t') {
+			argument[index++] = '\0';
+			while (argument[index] == ' ' || argument[index] == '\t') {
+				++index;
+			}
+			if (argument[index] == '\0') {
+				return 0;
+			}
+			*destination = &argument[index];
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static void shell_touch(const char *path)
+{
+	enum vfs_error error;
+
+	if (path == (const char *)0) {
+		shell_fs_error(VFS_INVALID_PATH);
+		return;
+	}
+	error = vfs_touch(shell_cwd, path, (struct vfs_node **)0);
+	if (error != VFS_OK) {
+		shell_fs_error(error);
+	}
+}
+
+static void shell_write(char *argument, int append)
+{
+	char *path;
+	char *text;
+	enum vfs_error error;
+
+	if (shell_path_and_text(argument, &path, &text) == 0) {
+		shell_fs_error(VFS_INVALID_PATH);
+		return;
+	}
+	error = append != 0 ?
+		vfs_append(shell_cwd, path, text, shell_string_length(text),
+			  (struct vfs_node **)0) :
+		vfs_write(shell_cwd, path, text, shell_string_length(text),
+			 (struct vfs_node **)0);
+	if (error != VFS_OK) {
+		shell_fs_error(error);
+	}
+}
+
+static void shell_remove(const char *path, int directory)
+{
+	enum vfs_error error;
+
+	if (path == (const char *)0) {
+		shell_fs_error(VFS_INVALID_PATH);
+		return;
+	}
+	error = directory != 0 ? vfs_rmdir(shell_cwd, path) :
+		vfs_remove(shell_cwd, path);
+	if (error == VFS_IS_DIRECTORY && directory == 0) {
+		console_write("Is a directory; use rmdir\r\n");
+	} else if (error != VFS_OK) {
+		shell_fs_error(error);
+	}
+}
+
+static void shell_mv(char *argument)
+{
+	char *source;
+	char *destination;
+	enum vfs_error error;
+
+	if (shell_two_paths(argument, &source, &destination) == 0) {
+		shell_fs_error(VFS_INVALID_PATH);
+		return;
+	}
+	error = vfs_rename(shell_cwd, source, destination);
+	if (error != VFS_OK) {
+		shell_fs_error(error);
+	}
 }
 
 static void shell_threads(void)
@@ -315,6 +445,18 @@ static void shell_execute(char *line, unsigned int length)
 		shell_mkdir(argument);
 	} else if (text_equals(line, "cat")) {
 		shell_cat(argument);
+	} else if (text_equals(line, "touch")) {
+		shell_touch(argument);
+	} else if (text_equals(line, "write")) {
+		shell_write(argument, 0);
+	} else if (text_equals(line, "append")) {
+		shell_write(argument, 1);
+	} else if (text_equals(line, "rm")) {
+		shell_remove(argument, 0);
+	} else if (text_equals(line, "rmdir")) {
+		shell_remove(argument, 1);
+	} else if (text_equals(line, "mv")) {
+		shell_mv(argument);
 	} else if (length != 0U) {
 		console_write("Unknown command: ");
 		console_write(line);

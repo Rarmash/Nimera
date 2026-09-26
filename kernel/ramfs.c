@@ -7,6 +7,7 @@ struct ramfs_node {
 	struct ramfs_node *next_sibling;
 	char *contents;
 	u64 size;
+	u64 capacity;
 };
 
 struct ramfs {
@@ -23,12 +24,29 @@ static enum vfs_error ramfs_mkdir(struct vfs_node *directory, const char *name,
 					  struct vfs_node **result);
 static enum vfs_error ramfs_read(struct vfs_node *file, char *buffer,
 					 u64 capacity, u64 *size);
+static enum vfs_error ramfs_write(struct vfs_node *file, const char *data,
+					  u64 size);
+static enum vfs_error ramfs_append(struct vfs_node *file, const char *data,
+					   u64 size);
+static enum vfs_error ramfs_remove(struct vfs_node *node);
+static enum vfs_error ramfs_rename(struct vfs_node *node, const char *name);
+static enum vfs_error ramfs_move(struct vfs_node *node,
+					 struct vfs_node *directory);
+static enum vfs_error ramfs_create_file(struct vfs_node *directory,
+						const char *name, const char *contents,
+						u64 size, struct vfs_node **result);
 
 static const struct vfs_operations ramfs_operations = {
 	.lookup = ramfs_lookup,
 	.readdir = ramfs_readdir,
 	.mkdir = ramfs_mkdir,
-	.read = ramfs_read
+	.create = ramfs_create_file,
+	.read = ramfs_read,
+	.write = ramfs_write,
+	.append = ramfs_append,
+	.remove = ramfs_remove,
+	.rename = ramfs_rename,
+	.move = ramfs_move
 };
 
 static unsigned int ramfs_string_length(const char *text)
@@ -106,6 +124,7 @@ static enum vfs_error ramfs_make_node(struct ramfs_node *parent,
 	node->next_sibling = (struct ramfs_node *)0;
 	node->contents = (char *)0;
 	node->size = 0ULL;
+	node->capacity = 0ULL;
 	if (parent != (struct ramfs_node *)0) {
 		struct ramfs_node *last = parent->first_child;
 
@@ -220,9 +239,154 @@ static enum vfs_error ramfs_read(struct vfs_node *file, char *buffer,
 	return VFS_OK;
 }
 
-enum vfs_error ramfs_create_file(struct vfs_node *directory, const char *name,
-					 const char *contents, u64 size,
-					 struct vfs_node **result)
+static enum vfs_error ramfs_resize(struct ramfs_node *node, u64 size)
+{
+	u64 capacity = node->capacity;
+	char *contents;
+
+	if (size <= capacity) {
+		return VFS_OK;
+	}
+	capacity = capacity == 0ULL ? 16ULL : capacity;
+	while (capacity < size) {
+		if (capacity > (~0ULL / 2ULL)) {
+			capacity = size;
+			break;
+		}
+		capacity *= 2ULL;
+	}
+	contents = (char *)kmalloc(capacity);
+	if (contents == (char *)0) {
+		return VFS_NO_MEMORY;
+	}
+	for (u64 index = 0ULL; index < node->size; ++index) {
+		contents[index] = node->contents[index];
+	}
+	if (node->contents != (char *)0) {
+		kfree(node->contents);
+	}
+	node->contents = contents;
+	node->capacity = capacity;
+	return VFS_OK;
+}
+
+static enum vfs_error ramfs_write(struct vfs_node *file, const char *data,
+					  u64 size)
+{
+	struct ramfs_node *node;
+	enum vfs_error error;
+
+	if (file->type == VFS_NODE_DIRECTORY) {
+		return VFS_IS_DIRECTORY;
+	}
+	node = ramfs_from_vfs(file);
+	error = ramfs_resize(node, size);
+	if (error != VFS_OK) {
+		return error;
+	}
+	for (u64 index = 0ULL; index < size; ++index) {
+		node->contents[index] = data[index];
+	}
+	node->size = size;
+	return VFS_OK;
+}
+
+static enum vfs_error ramfs_append(struct vfs_node *file, const char *data,
+					   u64 size)
+{
+	struct ramfs_node *node;
+	u64 old_size;
+	enum vfs_error error;
+
+	if (file->type == VFS_NODE_DIRECTORY) {
+		return VFS_IS_DIRECTORY;
+	}
+	node = ramfs_from_vfs(file);
+	old_size = node->size;
+	error = ramfs_resize(node, old_size + size);
+	if (error != VFS_OK) {
+		return error;
+	}
+	for (u64 index = 0ULL; index < size; ++index) {
+		node->contents[old_size + index] = data[index];
+	}
+	node->size = old_size + size;
+	return VFS_OK;
+}
+
+static void ramfs_unlink(struct ramfs_node *node)
+{
+	struct ramfs_node *parent = ramfs_from_vfs(node->vfs.parent);
+	struct ramfs_node *previous = (struct ramfs_node *)0;
+	struct ramfs_node *child = parent->first_child;
+
+	while (child != node) {
+		previous = child;
+		child = child->next_sibling;
+	}
+	if (previous == (struct ramfs_node *)0) {
+		parent->first_child = node->next_sibling;
+	} else {
+		previous->next_sibling = node->next_sibling;
+	}
+	node->next_sibling = (struct ramfs_node *)0;
+}
+
+static enum vfs_error ramfs_remove(struct vfs_node *node)
+{
+	struct ramfs_node *ram_node;
+
+	ram_node = ramfs_from_vfs(node);
+	if (node->type == VFS_NODE_DIRECTORY &&
+		ram_node->first_child != (struct ramfs_node *)0) {
+		return VFS_NOT_EMPTY;
+	}
+	ramfs_unlink(ram_node);
+	if (ram_node->contents != (char *)0) {
+		kfree(ram_node->contents);
+	}
+	kfree((void *)ram_node->vfs.name);
+	kfree(ram_node);
+	return VFS_OK;
+}
+
+static enum vfs_error ramfs_rename(struct vfs_node *node, const char *name)
+{
+	unsigned int length = ramfs_string_length(name);
+	char *stored_name;
+
+	if (length == 0U || length > VFS_NAME_MAX) {
+		return VFS_INVALID_PATH;
+	}
+	stored_name = (char *)kmalloc((u64)length + 1ULL);
+	if (stored_name == (char *)0) {
+		return VFS_NO_MEMORY;
+	}
+	for (unsigned int index = 0U; index < length; ++index) {
+		stored_name[index] = name[index];
+	}
+	stored_name[length] = '\0';
+	kfree((void *)node->name);
+	node->name = stored_name;
+	return VFS_OK;
+}
+
+static enum vfs_error ramfs_move(struct vfs_node *node,
+					 struct vfs_node *directory)
+{
+	struct ramfs_node *ram_node = ramfs_from_vfs(node);
+	struct ramfs_node *parent = ramfs_from_vfs(directory);
+
+	ramfs_unlink(ram_node);
+	ram_node->vfs.parent = directory;
+	ram_node->next_sibling = parent->first_child;
+	parent->first_child = ram_node;
+	return VFS_OK;
+}
+
+static enum vfs_error ramfs_create_file(struct vfs_node *directory,
+						const char *name, const char *contents,
+						u64 size, struct vfs_node **result)
 {
 	struct ramfs_node *node;
 	enum vfs_error error;
@@ -235,20 +399,8 @@ enum vfs_error ramfs_create_file(struct vfs_node *directory, const char *name,
 	if (error != VFS_OK) {
 		return error;
 	}
-	node->contents = (char *)kmalloc(size == 0ULL ? 1ULL : size);
-	if (node->contents == (char *)0) {
-		struct ramfs_node *previous = (struct ramfs_node *)0;
-		struct ramfs_node *child = ramfs_from_vfs(directory)->first_child;
-
-		while (child != node) {
-			previous = child;
-			child = child->next_sibling;
-		}
-		if (previous == (struct ramfs_node *)0) {
-			ramfs_from_vfs(directory)->first_child = node->next_sibling;
-		} else {
-			previous->next_sibling = node->next_sibling;
-		}
+	if (size != 0ULL && ramfs_resize(node, size) != VFS_OK) {
+		ramfs_unlink(node);
 		kfree((void *)node->vfs.name);
 		kfree(node);
 		return VFS_NO_MEMORY;
@@ -257,6 +409,8 @@ enum vfs_error ramfs_create_file(struct vfs_node *directory, const char *name,
 		node->contents[index] = contents[index];
 	}
 	node->size = size;
-	*result = &node->vfs;
+	if (result != (struct vfs_node **)0) {
+		*result = &node->vfs;
+	}
 	return VFS_OK;
 }

@@ -46,7 +46,7 @@ The current milestone successfully:
 - blocks the shell thread while the RX ring is empty, then wakes it from the
   PL011 receive IRQ without performing an immediate context switch; and
 - mounts a small in-memory RAMFS at `/`, creates the initial Nimera directory
-  tree, and exposes it through a minimal VFS and shell path commands.
+  tree, and exposes it through a minimal VFS and mutable shell file commands.
 
 There is currently no libc, `malloc/free`, persistent filesystem, userspace,
 processes, UART TX interrupt path, or other larger OS subsystem. The current
@@ -224,13 +224,18 @@ mounted during boot and creates this real namespace:
 ```
 
 `/system/version` is a regular RAMFS file containing the canonical Nimera
-version string. `ls`, `pwd`, `cd`, `mkdir`, and `cat` use the VFS resolver, so
+version string. `ls`, `pwd`, `cd`, `mkdir`, `cat`, `touch`, `write`, `append`,
+`rm`, `rmdir`, and `mv` use the VFS resolver, so
 relative paths, `.`, `..`, repeated slashes, and root clamping are real path
 operations rather than shell-only output. `ls` reports `Not a directory` when
 given a regular file.
 
 RAMFS metadata and file contents use the existing kernel heap. They are not
-persistent: all entries and contents disappear when QEMU stops. `NimFS` is
+persistent: all entries and contents disappear when QEMU stops. `write`
+replaces exact bytes and `append` adds exact bytes without an implicit newline.
+`rm` removes regular files; `rmdir` only removes empty directories; and `mv`
+requires a new, non-existing destination and rejects directory cycles. There
+are no permissions, ownership, timestamps, or recursive removal yet. `NimFS` is
 reserved for a future persistent native filesystem. `/volumes` is currently an
 ordinary empty directory reserved for future automounts, and `/devices` is an
 ordinary directory, not yet a devfs.
@@ -239,6 +244,7 @@ The isolated test is:
 
 ```sh
 make run-vfs
+make run-vfs-write
 ```
 
 ## PL011 receive IRQ
@@ -360,11 +366,11 @@ kernel: starting shell
 nimera $
 ```
 
-The built-in commands are `help`, `echo`, `uptime`, `ticks`, `irqs`, `mem`, and
-`version`. `ticks` reports the number of handled EL1 timer IRQs, while `irqs`
+The built-in commands include `help`, `echo`, `uptime`, `ticks`, `irqs`, `mem`,
+`threads`, `counter`, `version`, and the VFS commands listed above. `ticks` reports the number of handled EL1 timer IRQs, while `irqs`
 also reports UART RX IRQ and dropped-byte counters.
-They are compiled into the kernel; there is no filesystem, current working
-directory, userspace, or external program execution.
+They are compiled into the kernel; there is no persistent disk filesystem,
+userspace, or external program execution.
 
 The common console API is intentionally only three operations:
 `console_putc()`, `console_write()`, and `console_getc()`. It keeps kernel code
@@ -695,7 +701,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `kernel/heap.c` — the small PMM-backed first-fit heap with block splitting,
   coalescing, and validation of frees.
 - `kernel/shell.c` — fixed-buffer command shell using only the common Console
-  API; it provides the nine built-in commands and basic line editing.
+  API; it provides the built-in diagnostic and VFS commands plus basic line
+  editing.
 - `kernel/panic.c` — prints the panic report through Console API and halts in
   a simple `wfe` loop.
 - `kernel/pmm.c` — bitmap physical page manager initialized from the memory
@@ -703,10 +710,11 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `kernel/scheduler.c` — the two-thread round-robin scheduler, synthetic worker
   context, `WAITING`/wakeup transitions, stack checks, and isolated scheduler
   tests.
-- `kernel/vfs.c` — the root mount, path resolver, VFS dispatch, boot-created
-  directories, and `/system/version` creation.
-- `kernel/ramfs.c` — the heap-backed in-memory directory/file nodes and their
-  minimal VFS operations.
+- `kernel/vfs.c` — the root mount, shared parent/basename path helper, VFS
+  dispatch, mutation policy, boot-created directories, and `/system/version`
+  creation.
+- `kernel/ramfs.c` — the heap-backed in-memory directory/file nodes, geometric
+  file-buffer growth, child unlinking, renaming, and minimal VFS operations.
 - `kernel/timer.c` — validates timer frequency and exposes frequency, ticks,
   and monotonic milliseconds without architecture instructions.
 - `arch/aarch64/timer.c` — reads `CNTFRQ_EL0` and `CNTPCT_EL0` for the common
@@ -733,7 +741,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `run-pmm`, `run-heap`, `run-exception`, `run-mmu`, `run-mmu-fault`,
   `run-protection`, `run-protection-write`, `run-protection-exec`, `run-irq`,
   `run-uart-irq`, `run-uart-overflow`, `run-sched`, `run-blocking`, `run-vfs`,
-  and `clean`.
+  `run-vfs-write`, and `clean`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -771,6 +779,8 @@ This is a freestanding program rather than a hosted application:
   test; `make run-blocking` enables it in `build-blocking/`.
 - `-DNIMERA_VFS_TEST=0` keeps the normal shell path out of the VFS test;
   `make run-vfs` enables it in `build-vfs/`.
+- `-DNIMERA_VFS_WRITE_TEST=0` keeps the mutable VFS test out of the normal
+  shell path; `make run-vfs-write` enables it in `build-vfs-write/`.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.

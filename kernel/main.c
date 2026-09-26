@@ -138,6 +138,101 @@ static void vfs_test(u64 heap_before)
 }
 #endif
 
+#if NIMERA_VFS_WRITE_TEST
+static int vfs_bytes_equal(const char *left, u64 left_size,
+				   const char *right, u64 right_size)
+{
+	if (left_size != right_size) {
+		return 0;
+	}
+	for (u64 index = 0ULL; index < left_size; ++index) {
+		if (left[index] != right[index]) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+static void vfs_write_test(u64 heap_before)
+{
+	struct vfs_node *root = vfs_root();
+	struct vfs_node *node;
+	char contents[64];
+	u64 size;
+	static const char hello[] = "Hello Nimera";
+	static const char world[] = "world";
+	static const char suffix[] = "!";
+
+	console_write("Nimera VFS write test\r\nHeap allocated before test: ");
+	format_u64_decimal(heap_before);
+	console_write(" bytes\r\n");
+	if (vfs_touch(root, "/tmp/write-test.txt", &node) != VFS_OK ||
+		vfs_read(node, contents, sizeof(contents), &size) != VFS_OK ||
+		size != 0ULL) {
+		panic("VFS touch test failed");
+	}
+	console_write("create empty file: OK\r\n");
+	if (vfs_write(root, "/tmp/write-test.txt", hello,
+			      sizeof(hello) - 1ULL, &node) != VFS_OK ||
+		vfs_read(node, contents, sizeof(contents), &size) != VFS_OK ||
+		!vfs_bytes_equal(contents, size, hello, sizeof(hello) - 1ULL)) {
+		panic("VFS write/read test failed");
+	}
+	if (vfs_write(root, "/tmp/write-test.txt", world,
+			      sizeof(world) - 1ULL, &node) != VFS_OK ||
+		vfs_append(root, "/tmp/write-test.txt", suffix,
+			       sizeof(suffix) - 1ULL, &node) != VFS_OK ||
+		vfs_read(node, contents, sizeof(contents), &size) != VFS_OK ||
+		!vfs_bytes_equal(contents, size, "world!", 6ULL)) {
+		panic("VFS overwrite/append test failed");
+	}
+	console_write("write/read/overwrite/append: OK\r\nHeap allocated after create/write: ");
+	format_u64_decimal(heap_allocated_bytes());
+	console_write(" bytes\r\n");
+	if (vfs_write(root, "/tmp/auto.txt", "auto", 4ULL, &node) != VFS_OK ||
+		vfs_touch(root, "/tmp/auto.txt", &node) != VFS_OK ||
+		vfs_rename(root, "/tmp/write-test.txt", "/tmp/renamed.txt") != VFS_OK ||
+		vfs_touch(root, "/tmp/destination.txt", &node) != VFS_OK ||
+		vfs_rename(root, "/tmp/renamed.txt", "/tmp/destination.txt") !=
+			VFS_ALREADY_EXISTS) {
+		panic("VFS rename or duplicate destination test failed");
+	}
+	console_write("rename and duplicate destination guard: OK\r\n");
+	if (vfs_mkdir(root, "/tmp/move-dir", &node) != VFS_OK ||
+		vfs_mkdir(root, "/tmp/move-dir/child", &node) != VFS_OK ||
+		vfs_remove(node, ".") != VFS_BUSY ||
+		vfs_rmdir(node, "..") != VFS_BUSY ||
+		vfs_rename(root, "/tmp/move-dir", "/tmp/move-dir/child/loop") !=
+			VFS_INVALID_PATH ||
+		vfs_rename(root, "/tmp/renamed.txt", "/users/moved.txt") != VFS_OK) {
+		panic("VFS move or cycle guard test failed");
+	}
+	console_write("move across directories and cycle guard: OK\r\n");
+	if (vfs_rmdir(root, "/tmp/move-dir") != VFS_NOT_EMPTY) {
+		panic("VFS non-empty rmdir test failed");
+	}
+	if (vfs_remove(root, "/") != VFS_INVALID_PATH) {
+		panic("VFS root remove test failed");
+	}
+	if (vfs_remove(root, "/users/moved.txt") != VFS_OK) {
+		panic("VFS moved file remove test failed");
+	}
+	if (vfs_remove(root, "/tmp/destination.txt") != VFS_OK) {
+		panic("VFS destination remove test failed");
+	}
+	if (vfs_remove(root, "/tmp/auto.txt") != VFS_OK) {
+		panic("VFS auto file remove test failed");
+	}
+	if (vfs_rmdir(root, "/tmp/move-dir/child") != VFS_OK ||
+		vfs_rmdir(root, "/tmp/move-dir") != VFS_OK) {
+		panic("VFS directory cleanup test failed");
+	}
+	console_write("remove/rmdir/root guard: OK\r\nHeap allocated after cleanup: ");
+	format_u64_decimal(heap_allocated_bytes());
+	console_write(" bytes\r\nVFS write test complete.\r\n");
+}
+#endif
+
 #if NIMERA_BLOCKING_TEST
 static void blocking_test(void)
 {
@@ -424,9 +519,15 @@ void kernel_main(void)
 	heap_init();
 	u64 heap_before_filesystem = heap_allocated_bytes();
 	vfs_init();
+	u64 heap_after_filesystem = heap_allocated_bytes();
+	(void)heap_after_filesystem;
 
 #if NIMERA_VFS_TEST
 	vfs_test(heap_before_filesystem);
+	return;
+#endif
+#if NIMERA_VFS_WRITE_TEST
+	vfs_write_test(heap_after_filesystem);
 	return;
 #endif
 	(void)heap_before_filesystem;
