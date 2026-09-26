@@ -4,5 +4,6 @@
 void console_putc(char c);
 void console_write(const char *text);
 char console_getc(void);
+int console_try_getc(char *result);
 
 #endif

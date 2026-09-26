@@ -5,6 +5,7 @@
 extern void uart_putc(char c);
 extern void uart_puts(const char *text);
 extern char uart_getc(void);
+extern int uart_try_getc(char *result);
 
 void console_putc(char c)
 {
@@ -19,4 +20,9 @@ void console_write(const char *text)
 char console_getc(void)
 {
 	return uart_getc();
+}
+
+int console_try_getc(char *result)
+{
+	return uart_try_getc(result);
 }

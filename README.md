@@ -47,6 +47,8 @@ The current milestone successfully:
   PL011 receive IRQ without performing an immediate context switch; and
 - mounts a small in-memory RAMFS at `/`, creates the initial Nimera directory
   tree, and exposes it through a minimal VFS and mutable shell file commands.
+- decodes serial input into bounded logical key events and provides a small
+  terminal screen-control API backed by host ANSI sequences.
 
 There is currently no libc, `malloc/free`, persistent filesystem, userspace,
 processes, UART TX interrupt path, or other larger OS subsystem. The current
@@ -125,6 +127,26 @@ cannot create a lost wakeup. `wfe` is only the parking instruction used after
 the thread has blocked, not a runnable polling loop. There is no history,
 autocomplete, cursor movement, shell scripting, or command registry. TX still
 polls PL011 readiness.
+
+The terminal layer sits above that path:
+
+```text
+PL011 IRQ -> RX ring -> Console API -> logical key events -> shell/future editor
+```
+
+`terminal_read_key()` recognizes printable ASCII, Enter, Backspace, Escape,
+cursor keys, Home, End, Delete, and Ctrl+S/Ctrl+Q. Common ANSI sequences such
+as `ESC [ A`, `ESC [ D`, `ESC [ 3 ~`, and `ESC O H/F` are parsed by a bounded
+state machine. An isolated Escape has finite lookahead, so it cannot leave the
+parser waiting forever; unknown sequences reset the parser state.
+
+The terminal screen API provides clear-screen, cursor movement, line clearing,
+cursor visibility, and default dimensions of 80 columns by 25 rows. The QEMU
+serial backend implements these operations with ANSI/VT escape sequences from
+the host terminal. Future NimEdit code should use this logical API rather than
+knowing PL011 registers or the ANSI protocol. There is no framebuffer, native
+graphics backend, Unicode input, terminal-size negotiation, or general VT100
+emulator yet.
 
 The panic and exception paths share a small architecture-specific `cpu_halt()`
 primitive. `panic()` writes a fatal message and reason through the common
@@ -665,6 +687,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   permissioned L3 pages, validates representative permissions, and enables
   EL1 MMU translation.
 - `include/nimera/console.h` — the small platform-independent console API.
+- `include/nimera/terminal.h` — logical key events, screen controls, and the
+  default 80x25 terminal dimensions.
 - `include/nimera/exception.h` — exception initialization and fatal-report API.
 - `include/nimera/format.h` — minimal unsigned decimal and hexadecimal output
   helpers used where a number must be displayed.
@@ -689,6 +713,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `include/nimera/types.h` — the minimal freestanding `u64` type definition.
 - `kernel/console.c` — delegates the common console API to the current UART
   implementation.
+- `kernel/terminal.c` — bounded ANSI key decoding and the minimal logical
+  screen API; it does not access PL011 directly.
 - `kernel/exception.c` — prints synchronous-exception diagnostics through the
   Console API and halts the CPU.
 - `kernel/main.c` — defines `kernel_main()`, initializes the timer, and starts
@@ -725,7 +751,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   does not implement an allocator.
 - `platform/qemu-virt/uart.c` — minimal PL011 MMIO input and output for QEMU
   `virt`; TX is polling, while RX drains into the fixed interrupt-side ring and
-  wakes the blocked console consumer.
+  wakes the blocked console consumer. It also exposes nonblocking access to
+  already-buffered bytes for terminal sequence lookahead.
 - `platform/qemu-virt/irq.c` — minimal DTB discovery of the GICv2 MMIO ranges
   and the architected timer PPI.
 - `platform/qemu-virt/gic.c` — minimal one-CPU GICv2 setup, acknowledge, and
@@ -741,7 +768,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `run-pmm`, `run-heap`, `run-exception`, `run-mmu`, `run-mmu-fault`,
   `run-protection`, `run-protection-write`, `run-protection-exec`, `run-irq`,
   `run-uart-irq`, `run-uart-overflow`, `run-sched`, `run-blocking`, `run-vfs`,
-  `run-vfs-write`, and `clean`.
+  `run-vfs-write`, `run-terminal`, and `clean`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -781,6 +808,8 @@ This is a freestanding program rather than a hosted application:
   `make run-vfs` enables it in `build-vfs/`.
 - `-DNIMERA_VFS_WRITE_TEST=0` keeps the mutable VFS test out of the normal
   shell path; `make run-vfs-write` enables it in `build-vfs-write/`.
+- `-DNIMERA_TERMINAL_TEST=0` keeps the interactive key/screen test out of the
+  normal shell path; `make run-terminal` enables it in `build-terminal/`.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.

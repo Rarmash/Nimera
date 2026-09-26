@@ -6,6 +6,7 @@
 #include <nimera/pmm.h>
 #include <nimera/scheduler.h>
 #include <nimera/shell.h>
+#include <nimera/terminal.h>
 #include <nimera/timer.h>
 #include <nimera/version.h>
 #include <nimera/vfs.h>
@@ -413,13 +414,7 @@ static void shell_execute(char *line, unsigned int length)
 	if (text_equals(line, "help")) {
 		shell_help();
 	} else if (echo_command != 0U) {
-		unsigned int argument = 4U;
-
-		while (argument < length &&
-		       (line[argument] == ' ' || line[argument] == '\t')) {
-			++argument;
-		}
-		console_write(line + argument);
+		console_write(argument == (char *)0 ? "" : argument);
 		console_write("\r\n");
 	} else if (text_equals(line, "uptime")) {
 		shell_uptime();
@@ -468,7 +463,6 @@ __attribute__((noreturn))
 void shell_run(void)
 {
 	char line[SHELL_LINE_CAPACITY];
-	unsigned int swallow_lf = 0U;
 	shell_cwd = vfs_root();
 
 	for (;;) {
@@ -484,29 +478,26 @@ void shell_run(void)
 		}
 		console_write(" $ ");
 		for (;;) {
-			char c = console_getc();
+			struct key_event event = terminal_read_key();
 
-			if (c == '\n' && swallow_lf != 0U) {
-				swallow_lf = 0U;
-				continue;
-			}
-			if (c == '\r' || c == '\n') {
+			if (event.code == KEY_ENTER) {
 				console_write("\r\n");
-				swallow_lf = c == '\r';
 				line[length] = '\0';
 				shell_execute(line, length);
 				break;
 			}
-			if (c == '\b' || c == 127) {
+			if (event.code == KEY_BACKSPACE) {
 				if (length != 0U) {
 					--length;
 					console_write("\b \b");
 				}
 				continue;
 			}
-			if (c >= 32 && c <= 126 && length < SHELL_LINE_CAPACITY - 1U) {
-				line[length++] = c;
-				console_putc(c);
+			if (event.code == KEY_CHAR && event.ctrl == 0U &&
+				event.ch >= 32 && event.ch <= 126 &&
+				length < SHELL_LINE_CAPACITY - 1U) {
+				line[length++] = event.ch;
+				console_putc(event.ch);
 			}
 		}
 	}

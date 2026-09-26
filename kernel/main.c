@@ -11,12 +11,66 @@
 #include <nimera/pmm.h>
 #include <nimera/shell.h>
 #include <nimera/scheduler.h>
+#include <nimera/terminal.h>
 #include <nimera/timer.h>
 #include <nimera/vfs.h>
 
 #define NULL ((void *)0)
 
 extern int uart_overflow_test(void);
+
+#if NIMERA_TERMINAL_TEST
+static const char *terminal_key_name(const struct key_event *event)
+{
+	if (event->code == KEY_CHAR && event->ctrl != 0U) {
+		return event->ch == 's' ? "CTRL+S" : "CTRL+Q";
+	}
+	switch (event->code) {
+	case KEY_ENTER: return "ENTER";
+	case KEY_BACKSPACE: return "BACKSPACE";
+	case KEY_DELETE: return "DELETE";
+	case KEY_UP: return "UP";
+	case KEY_DOWN: return "DOWN";
+	case KEY_LEFT: return "LEFT";
+	case KEY_RIGHT: return "RIGHT";
+	case KEY_HOME: return "HOME";
+	case KEY_END: return "END";
+	case KEY_ESCAPE: return "ESCAPE";
+	case KEY_CHAR: return "CHAR";
+	default: return "UNKNOWN";
+	}
+}
+
+static void terminal_test(void)
+{
+	console_write("Nimera terminal input test\r\n");
+	terminal_clear();
+	terminal_hide_cursor();
+	terminal_move_cursor(0U, 0U);
+	console_write("+----------------------+");
+	terminal_move_cursor(1U, 0U);
+	console_write("| Nimera terminal test |");
+	terminal_move_cursor(2U, 0U);
+	console_write("| screen control: OK   |");
+	terminal_move_cursor(3U, 0U);
+	console_write("+----------------------+");
+	terminal_move_cursor(5U, 0U);
+	terminal_clear_line();
+	console_write("Press arrows, Home, End, Delete, Ctrl+S, then Ctrl+Q.");
+	for (;;) {
+		struct key_event event = terminal_read_key();
+
+		console_write("\r\nKey: ");
+		console_write(terminal_key_name(&event));
+		if (event.code == KEY_CHAR && event.ctrl != 0U &&
+			event.ch == 'q') {
+			break;
+		}
+	}
+	terminal_show_cursor();
+	console_write("\r\nTerminal input test complete.\r\n");
+}
+#endif
 
 #if NIMERA_PROTECTION_TEST
 static volatile u64 protection_data = 0x4e696d657261ULL;
@@ -539,6 +593,11 @@ void kernel_main(void)
 	irq_init();
 	scheduler_init();
 	irq_enable();
+
+#if NIMERA_TERMINAL_TEST
+	terminal_test();
+	return;
+#endif
 
 #if NIMERA_SCHED_TEST
 	scheduler_test();

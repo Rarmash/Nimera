@@ -95,6 +95,22 @@ char uart_getc(void)
 	}
 }
 
+int uart_try_getc(char *result)
+{
+	u64 irq_state = irq_save_disable();
+	unsigned int tail = rx_tail;
+
+	if (tail == rx_head) {
+		irq_restore(irq_state);
+		return 0;
+	}
+	*result = (char)rx_storage[tail];
+	compiler_memory_barrier();
+	rx_tail = (tail + 1U) % UART_RX_BUFFER_CAPACITY;
+	irq_restore(irq_state);
+	return 1;
+}
+
 void uart_puts(const char *text)
 {
 	while (*text != '\0') {
