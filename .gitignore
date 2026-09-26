@@ -1,3 +1,4 @@
 build/
 build-panic/
 build-timer/
+build-memory/

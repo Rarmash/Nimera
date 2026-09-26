@@ -23,7 +23,8 @@ The current milestone successfully:
 - writes `Hello from kernel` through QEMU `virt`'s PL011 UART; and
 - enables polling UART input and echoes each received character;
 - provides a minimal kernel panic path that reports a reason and halts safely;
-- reads the AArch64 Generic Timer to measure monotonic elapsed time.
+- reads the AArch64 Generic Timer to measure monotonic elapsed time; and
+- discovers the physical RAM region from QEMU's Device Tree Blob.
 
 There is currently no libc, allocator, interrupt subsystem, scheduler,
 filesystem, userspace, or other larger OS subsystem.
@@ -81,6 +82,25 @@ This is monotonic uptime, not a clock showing the current time of day: Nimera
 does not yet have an RTC, calendar date, wall clock, or timezone handling.
 Calling `timer_uptime_ms()` before `timer_init()` triggers `panic()` rather than
 returning an uninitialized value.
+
+## Physical memory discovery
+
+QEMU's Device Tree Blob (DTB) is a small structured description of the virtual
+machine: it tells software which devices exist and which physical memory
+regions are present. With the current `-machine virt` and generic-loader boot
+command, QEMU places the DTB at `0x40000000`; this was verified directly when
+QEMU reported the DTB occupying `0x40000000..0x40100000` while diagnosing the
+ELF load address. The kernel image starts at `0x40100000`, after that DTB area.
+
+The QEMU `virt` parser checks the DTB magic and bounds, reads its big-endian
+fields, follows the structure block, and uses the root `#address-cells` and
+`#size-cells` values to decode the memory node's `reg` property. The common API
+returns only the physical base and physical size.
+
+This is physical memory discovery, not memory management. Physical memory is
+what the machine reports; usable memory would require reserving firmware, DTB,
+and kernel regions, and free memory would additionally require an allocator.
+Nimera does not implement either yet.
 
 The terminal output is:
 
@@ -175,6 +195,16 @@ tick
 Timer test complete.
 ```
 
+To exercise physical memory discovery, use an isolated test image and choose
+QEMU's RAM size:
+
+```sh
+make run-memory QEMU_MEMORY=128M
+```
+
+The test prints the physical base, byte count, and whole MiB count reported by
+the Device Tree. `build-memory/` is kept separate from the ordinary build.
+
 `make clean` removes generated objects, the ELF, and the link map:
 
 ```sh
@@ -195,6 +225,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 ├── include/
 │   └── nimera/
 │       ├── console.h
+│       ├── memory.h
 │       ├── panic.h
 │       ├── timer.h
 │       └── types.h
@@ -205,16 +236,19 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 ├── kernel/
 │   ├── console.c
 │   ├── main.c
+│   ├── memory.c
 │   ├── panic.c
 │   └── timer.c
 └── platform/
     └── qemu-virt/
+        ├── memory.c
         └── uart.c
 ```
 
 - `arch/aarch64/boot.S` — the only assembly file; installs the initial stack,
   calls C, and provides the fallback loop if C returns.
 - `include/nimera/console.h` — the small platform-independent console API.
+- `include/nimera/memory.h` — the common physical memory information API.
 - `include/nimera/panic.h` — the non-returning `panic()` API.
 - `include/nimera/timer.h` — the platform-independent timer API.
 - `include/nimera/types.h` — the minimal freestanding `u64` type definition.
@@ -222,18 +256,22 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   implementation.
 - `kernel/main.c` — defines `kernel_main()` and the minimal polling echo loop;
   it does not call UART functions directly.
+- `kernel/memory.c` — exposes the common memory API through the platform
+  discovery implementation.
 - `kernel/panic.c` — prints the panic report through Console API and halts in
   a simple `wfe` loop.
 - `kernel/timer.c` — validates timer frequency and exposes frequency, ticks,
   and monotonic milliseconds without architecture instructions.
 - `arch/aarch64/timer.c` — reads `CNTFRQ_EL0` and `CNTPCT_EL0` for the common
   timer layer.
+- `platform/qemu-virt/memory.c` — minimal QEMU `virt` FDT parser for the
+  physical memory node; it does not implement an allocator.
 - `platform/qemu-virt/uart.c` — minimal PL011 MMIO input and output for QEMU
   `virt`.
 - `linker.ld` — defines `_start`, the fixed image address, ELF sections, and a
   16 KiB private stack in `NOLOAD` `.bss`.
-- `Makefile` — builds seven object files and links them directly with LLD;
-  provides `build`, `run`, `run-panic`, `run-timer`, and `clean`.
+- `Makefile` — builds nine object files and links them directly with LLD;
+  provides `build`, `run`, `run-panic`, `run-timer`, `run-memory`, and `clean`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -255,9 +293,10 @@ This is a freestanding program rather than a hosted application:
   that would require additional runtime support.
 - `-Iinclude` makes the project's freestanding headers available without
   depending on host or libc headers.
-- `-DNIMERA_PANIC_TEST=0` and `-DNIMERA_TIMER_TEST=0` keep the normal build
-  path free of test flows; the dedicated Make targets enable their respective
-  switch in isolated build directories.
+- `-DNIMERA_PANIC_TEST=0`, `-DNIMERA_TIMER_TEST=0`, and
+  `-DNIMERA_MEMORY_TEST=0` keep the normal build path free of test flows; the
+  dedicated Make targets enable their respective switch in isolated build
+  directories.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.
@@ -287,5 +326,4 @@ Nimera aims to:
 
 The near-term roadmap is deliberately short:
 
-1. Memory discovery and reporting
-2. Minimal interactive shell
+1. Minimal interactive shell
