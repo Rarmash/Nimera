@@ -67,6 +67,7 @@ static void shell_help(void)
 	console_write("  rmdir <directory>\r\n");
 	console_write("  mv <source> <destination>\r\n");
 	console_write("  edit <path>\r\n");
+	console_write("  terminal\r\n");
 }
 
 static void shell_ls(const char *path)
@@ -305,6 +306,17 @@ static void shell_edit(const char *path)
 	(void)editor_run(shell_cwd, path);
 }
 
+static void shell_terminal(void)
+{
+	console_write("Terminal: ANSI\r\nSize: ");
+	format_u64_decimal((u64)terminal_columns());
+	console_putc('x');
+	format_u64_decimal((u64)terminal_rows());
+	console_write("\r\nGeometry: ");
+	console_write(terminal_geometry_detected() != 0U ?
+		"detected\r\n" : "fallback\r\n");
+}
+
 static void shell_threads(void)
 {
 	unsigned int index;
@@ -465,6 +477,8 @@ static void shell_execute(char *line, unsigned int length)
 		shell_mv(argument);
 	} else if (text_equals(line, "edit")) {
 		shell_edit(argument);
+	} else if (text_equals(line, "terminal")) {
+		shell_terminal();
 	} else if (length != 0U) {
 		console_write("Unknown command: ");
 		console_write(line);

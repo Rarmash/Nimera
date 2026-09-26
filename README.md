@@ -49,6 +49,8 @@ The current milestone successfully:
   tree, and exposes it through a minimal VFS and mutable shell file commands.
 - decodes serial input into bounded logical key events and provides a small
   terminal screen-control API backed by host ANSI sequences.
+- queries ANSI host terminal geometry once at boot, using detected dimensions
+  when available and falling back to 80x25 when it is not.
 - provides NimEdit 0.1, a small built-in kernel text editor with VFS-backed
   load/save, ASCII editing, cursor movement, vertical scrolling, dirty-state
   tracking, and Ctrl-S/Ctrl-Q controls.
@@ -93,11 +95,15 @@ The entry point is `_start` in `arch/aarch64/boot.S`:
    only after setup.
 8. The fixed shell and worker thread table is initialized, then IRQs are
    enabled.
-9. An IRQ vector stub saves all general-purpose registers plus `ELR_EL1` and
+9. `terminal_init()` sends the ANSI `CSI 18 t` query once. A valid
+   `CSI 8;<rows>;<columns>t` response updates the terminal API; timeout,
+   malformed input, or unreasonable dimensions keep the 80x25 fallback.
+   Unrelated bytes remain in a bounded terminal pending queue.
+10. An IRQ vector stub saves all general-purpose registers plus `ELR_EL1` and
    `SPSR_EL1`, dispatches the GIC timer or UART interrupt, and returns with
    `eret`. A timer IRQ may replace the saved frame with another kernel thread's
    frame before that return.
-10. The shell reads input through the Console API, collects one fixed-size line,
+11. The shell reads input through the Console API, collects one fixed-size line,
    parses one of its built-in commands, and prints the next prompt.
 
 With the current QEMU `virt` plus generic-loader invocation, `CurrentEL` was
@@ -143,13 +149,21 @@ as `ESC [ A`, `ESC [ D`, `ESC [ 3 ~`, and `ESC O H/F` are parsed by a bounded
 state machine. An isolated Escape has finite lookahead, so it cannot leave the
 parser waiting forever; unknown sequences reset the parser state.
 
+The shell command `terminal` reports the current ANSI size and whether the
+one-shot query was detected or fell back.
+
 The terminal screen API provides clear-screen, cursor movement, line clearing,
-cursor visibility, and default dimensions of 80 columns by 25 rows. The QEMU
-serial backend implements these operations with ANSI/VT escape sequences from
-the host terminal. NimEdit uses this logical API rather than knowing PL011
-registers or the ANSI protocol. There is no framebuffer, native
-graphics backend, Unicode input, terminal-size negotiation, or general VT100
-emulator yet.
+cursor visibility, and runtime rows/columns. The QEMU serial backend implements
+these operations with ANSI/VT escape sequences from the host terminal. At
+initialization it sends `CSI 18 t` and accepts only the bounded response form
+`CSI 8;<rows>;<columns>t`; valid dimensions are 20..500 columns and 10..200
+rows. The fallback is 80x25, and failure to detect geometry never panics or
+blocks boot indefinitely. Unrelated bytes read while recognizing the response
+are retained in a small terminal-level FIFO before normal key decoding.
+NimEdit uses this logical API rather than knowing PL011 registers or the ANSI
+protocol. Geometry is detected once per boot; live resize is not implemented.
+There is no framebuffer, native graphics backend, Unicode input, or general
+VT100 emulator yet.
 
 NimEdit 0.1 is entered with the shell command `edit <path>`. It is a kernel
 application, not a userspace process: it uses the common terminal and VFS APIs
@@ -710,8 +724,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   permissioned L3 pages, validates representative permissions, and enables
   EL1 MMU translation.
 - `include/nimera/console.h` — the small platform-independent console API.
-- `include/nimera/terminal.h` — logical key events, screen controls, and the
-  default 80x25 terminal dimensions.
+- `include/nimera/terminal.h` — logical key events, screen controls, runtime
+  geometry, and the 80x25 fallback dimensions.
 - `include/nimera/exception.h` — exception initialization and fatal-report API.
 - `include/nimera/format.h` — minimal unsigned decimal and hexadecimal output
   helpers used where a number must be displayed.
@@ -736,8 +750,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `include/nimera/types.h` — the minimal freestanding `u64` type definition.
 - `kernel/console.c` — delegates the common console API to the current UART
   implementation.
-- `kernel/terminal.c` — bounded ANSI key decoding and the minimal logical
-  screen API; it does not access PL011 directly.
+- `kernel/terminal.c` — bounded ANSI key decoding, one-shot geometry
+  detection, fallback, and pending input; it does not access PL011 directly.
 - `kernel/exception.c` — prints synchronous-exception diagnostics through the
   Console API and halts the CPU.
 - `kernel/main.c` — defines `kernel_main()`, initializes the timer, and starts
@@ -794,7 +808,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `run-pmm`, `run-heap`, `run-exception`, `run-mmu`, `run-mmu-fault`,
   `run-protection`, `run-protection-write`, `run-protection-exec`, `run-irq`,
   `run-uart-irq`, `run-uart-overflow`, `run-sched`, `run-blocking`, `run-vfs`,
-  `run-vfs-write`, `run-terminal`, `run-editor`, and `clean`. Test builds use
+  `run-vfs-write`, `run-terminal`, `run-terminal-size`,
+  `run-terminal-size-fallback`, `run-editor`, and `clean`. Test builds use
   separate directories so their compile-time paths cannot contaminate `make
   run`.
 - `README.md` — project status, workflow, and design notes.
@@ -838,6 +853,10 @@ This is a freestanding program rather than a hosted application:
   shell path; `make run-vfs-write` enables it in `build-vfs-write/`.
 - `-DNIMERA_TERMINAL_TEST=0` keeps the interactive key/screen test out of the
   normal shell path; `make run-terminal` enables it in `build-terminal/`.
+- `-DNIMERA_TERMINAL_SIZE_TEST=0` keeps the geometry diagnostic out of the
+  normal shell path; `make run-terminal-size` enables it in
+  `build-terminal-size/`, while `run-terminal-size-fallback` uses a separate
+  build with the response disabled.
 - `-DNIMERA_EDITOR_TEST=0` keeps the automated editor self-test out of the
   normal shell path; `make run-editor` enables it in `build-editor/`.
 - `-T linker.ld` supplies the complete memory layout and entry point.

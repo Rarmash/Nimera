@@ -73,6 +73,27 @@ static void terminal_test(void)
 }
 #endif
 
+#if NIMERA_TERMINAL_SIZE_TEST
+static void terminal_size_test(void)
+{
+	console_write("Nimera terminal geometry test\r\nQuery: CSI 18 t\r\n");
+	if (terminal_geometry_self_test() == 0) {
+		panic("terminal geometry parser test failed");
+	}
+	console_write(terminal_geometry_detected() != 0U ?
+		"Response: valid\r\n" : "Response: unavailable\r\n");
+	console_write("Rows: ");
+	format_u64_decimal((u64)terminal_rows());
+	console_write("\r\nColumns: ");
+	format_u64_decimal((u64)terminal_columns());
+	console_write("\r\n");
+	if (terminal_geometry_detected() == 0U) {
+		console_write("Fallback: yes\r\n");
+	}
+	console_write("Terminal geometry test complete.\r\n");
+}
+#endif
+
 #if NIMERA_PROTECTION_TEST
 static volatile u64 protection_data = 0x4e696d657261ULL;
 #endif
@@ -599,6 +620,11 @@ void kernel_main(void)
 	scheduler_init();
 	irq_enable();
 
+#if NIMERA_TERMINAL_SIZE_TEST
+	terminal_init();
+	terminal_size_test();
+	return;
+#endif
 #if NIMERA_TERMINAL_TEST
 	terminal_test();
 	return;
@@ -696,5 +722,6 @@ void kernel_main(void)
 	console_write("sched: enabled\r\n");
 	console_write("fs: root mounted\r\n");
 	console_write("kernel: starting shell\r\n");
+	terminal_init();
 	shell_run();
 }

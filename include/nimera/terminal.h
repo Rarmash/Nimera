@@ -28,6 +28,10 @@ struct key_event {
 
 struct key_event terminal_read_key(void);
 
+void terminal_init(void);
+unsigned int terminal_geometry_detected(void);
+int terminal_geometry_self_test(void);
+
 void terminal_clear(void);
 void terminal_move_cursor(unsigned int row, unsigned int column);
 void terminal_clear_line(void);

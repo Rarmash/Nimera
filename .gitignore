@@ -18,4 +18,6 @@ build-blocking/
 build-vfs/
 build-vfs-write/
 build-terminal/
+build-terminal-size/
+build-terminal-size-fallback/
 build-editor/
