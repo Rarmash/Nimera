@@ -15,3 +15,4 @@ build-uart-irq/
 build-uart-overflow/
 build-sched/
 build-blocking/
+build-vfs/

@@ -1,0 +1,69 @@
+#ifndef NIMERA_VFS_H
+#define NIMERA_VFS_H
+
+#include <nimera/types.h>
+
+#define VFS_NAME_MAX 31U
+#define VFS_PATH_MAX 128U
+
+enum vfs_node_type {
+	VFS_NODE_FILE,
+	VFS_NODE_DIRECTORY
+};
+
+enum vfs_error {
+	VFS_OK,
+	VFS_NOT_FOUND,
+	VFS_NOT_DIRECTORY,
+	VFS_IS_DIRECTORY,
+	VFS_ALREADY_EXISTS,
+	VFS_NO_MEMORY,
+	VFS_INVALID_PATH,
+	VFS_TOO_LARGE
+};
+
+struct vfs_node;
+
+struct vfs_operations {
+	enum vfs_error (*lookup)(struct vfs_node *directory, const char *name,
+				 struct vfs_node **result);
+	enum vfs_error (*readdir)(struct vfs_node *directory, unsigned int index,
+				  struct vfs_node **result);
+	enum vfs_error (*mkdir)(struct vfs_node *directory, const char *name,
+			       struct vfs_node **result);
+	enum vfs_error (*read)(struct vfs_node *file, char *buffer, u64 capacity,
+			      u64 *size);
+};
+
+struct vfs_node {
+	const char *name;
+	enum vfs_node_type type;
+	struct vfs_node *parent;
+	void *private_data;
+	const struct vfs_operations *operations;
+};
+
+void vfs_init(void);
+struct vfs_node *vfs_root(void);
+enum vfs_error vfs_mount_root(struct vfs_node *root);
+enum vfs_error vfs_resolve(struct vfs_node *cwd, const char *path,
+			   struct vfs_node **result);
+enum vfs_error vfs_mkdir(struct vfs_node *cwd, const char *path,
+				struct vfs_node **result);
+enum vfs_error vfs_create_file(struct vfs_node *cwd, const char *path,
+			       const char *contents, u64 size,
+			       struct vfs_node **result);
+enum vfs_error vfs_lookup(struct vfs_node *directory, const char *name,
+				  struct vfs_node **result);
+enum vfs_error vfs_readdir(struct vfs_node *directory, unsigned int index,
+				   struct vfs_node **result);
+enum vfs_error vfs_read(struct vfs_node *file, char *buffer, u64 capacity,
+				u64 *size);
+enum vfs_error vfs_format_path(const struct vfs_node *node, char *buffer,
+			       u64 capacity);
+const char *vfs_error_string(enum vfs_error error);
+const char *vfs_node_name(const struct vfs_node *node);
+struct vfs_node *vfs_node_parent(struct vfs_node *node);
+enum vfs_node_type vfs_node_type(const struct vfs_node *node);
+
+#endif

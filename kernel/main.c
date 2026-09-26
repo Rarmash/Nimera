@@ -12,6 +12,7 @@
 #include <nimera/shell.h>
 #include <nimera/scheduler.h>
 #include <nimera/timer.h>
+#include <nimera/vfs.h>
 
 #define NULL ((void *)0)
 
@@ -60,6 +61,80 @@ static void uart_ring_overflow_test(void)
 	console_write("Unread bytes preserved: yes\r\nDropped bytes: ");
 	format_u64_decimal(irq_uart_dropped_bytes());
 	console_write("\r\nUART ring overflow test complete.\r\n");
+}
+#endif
+
+#if NIMERA_VFS_TEST
+static int vfs_name_is(const struct vfs_node *node, const char *name)
+{
+	unsigned int index = 0U;
+
+	while (vfs_node_name(node)[index] != '\0' && name[index] != '\0') {
+		if (vfs_node_name(node)[index] != name[index]) {
+			return 0;
+		}
+		++index;
+	}
+	return vfs_node_name(node)[index] == '\0' && name[index] == '\0';
+}
+
+static void vfs_test(u64 heap_before)
+{
+	static const char *directories[] = {
+		"system", "apps", "users", "volumes", "devices", "config",
+		"var", "tmp"
+	};
+	struct vfs_node *root = vfs_root();
+	struct vfs_node *node;
+	char contents[64];
+	u64 size;
+
+	console_write("Nimera VFS test\r\nRoot mount: RAMFS\r\n\r\n");
+	console_write("Root directories:\r\n");
+	for (unsigned int index = 0U; index < 8U; ++index) {
+		if (vfs_lookup(root, directories[index], &node) != VFS_OK ||
+		    vfs_node_type(node) != VFS_NODE_DIRECTORY) {
+			panic("VFS root directory test failed");
+		}
+		console_write("  ");
+		console_write(vfs_node_name(node));
+		console_write("\r\n");
+	}
+	if (vfs_resolve(root, "/system/version", &node) != VFS_OK ||
+	    vfs_node_type(node) != VFS_NODE_FILE ||
+	    vfs_resolve(root, "system", &node) != VFS_OK ||
+	    vfs_resolve(node, "../apps", &node) != VFS_OK ||
+	    !vfs_name_is(node, "apps")) {
+		panic("VFS path resolution test failed");
+	}
+	if (vfs_resolve(root, ".", &node) != VFS_OK || node != root ||
+	    vfs_resolve(root, "..", &node) != VFS_OK || node != root) {
+		panic("VFS dot test failed");
+	}
+	console_write("Path resolution: OK\r\n");
+	if (vfs_mkdir(root, "tmp/vfs-test", &node) != VFS_OK ||
+	    vfs_resolve(root, "./tmp/vfs-test", &node) != VFS_OK ||
+	    vfs_mkdir(root, "tmp/vfs-test", (struct vfs_node **)0) !=
+		VFS_ALREADY_EXISTS ||
+	    vfs_resolve(root, "/missing", &node) != VFS_NOT_FOUND) {
+		panic("VFS mkdir or lookup test failed");
+	}
+	console_write("Relative paths: OK\r\nDot/dot-dot: OK\r\n");
+	console_write("mkdir: OK\r\nDuplicate mkdir guard: OK\r\n");
+	if (vfs_resolve(root, "/system/version", &node) != VFS_OK ||
+	    vfs_read(node, contents, sizeof(contents), &size) != VFS_OK ||
+	    size != 14ULL) {
+		panic("VFS file read test failed");
+	}
+	console_write("File read: OK\r\n\r\n/system/version:\r\n");
+	for (u64 index = 0ULL; index < size; ++index) {
+		console_putc(contents[index]);
+	}
+	console_write("\r\n\r\nHeap allocated before filesystem: ");
+	format_u64_decimal(heap_before);
+	console_write(" bytes\r\nHeap allocated after filesystem: ");
+	format_u64_decimal(heap_allocated_bytes());
+	console_write(" bytes\r\nVFS test complete.\r\n");
 }
 #endif
 
@@ -347,6 +422,14 @@ void kernel_main(void)
 #endif
 	mmu_init(&map);
 	heap_init();
+	u64 heap_before_filesystem = heap_allocated_bytes();
+	vfs_init();
+
+#if NIMERA_VFS_TEST
+	vfs_test(heap_before_filesystem);
+	return;
+#endif
+	(void)heap_before_filesystem;
 
 #if NIMERA_IRQ_TEST
 	irq_test();
@@ -445,6 +528,8 @@ void kernel_main(void)
 	console_write("Nimera booting...\r\n");
 	console_write("MMU: enabled\r\n");
 	console_write("irq: enabled\r\n");
+	console_write("sched: enabled\r\n");
+	console_write("fs: root mounted\r\n");
 	console_write("kernel: starting shell\r\n");
 	shell_run();
 }

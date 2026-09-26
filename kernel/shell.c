@@ -8,6 +8,7 @@
 #include <nimera/shell.h>
 #include <nimera/timer.h>
 #include <nimera/version.h>
+#include <nimera/vfs.h>
 
 #define SHELL_LINE_CAPACITY 128U
 
@@ -32,6 +33,14 @@ static unsigned int starts_echo(const char *line, unsigned int length)
 	       (length == 4U || line[4] == ' ' || line[4] == '\t');
 }
 
+static struct vfs_node *shell_cwd;
+
+static void shell_fs_error(enum vfs_error error)
+{
+	console_write(vfs_error_string(error));
+	console_write("\r\n");
+}
+
 static void shell_help(void)
 {
 	console_write("Available commands:\r\n");
@@ -44,6 +53,114 @@ static void shell_help(void)
 	console_write("  threads\r\n");
 	console_write("  counter\r\n");
 	console_write("  version\r\n");
+	console_write("  ls [path]\r\n");
+	console_write("  pwd\r\n");
+	console_write("  cd <path>\r\n");
+	console_write("  mkdir <path>\r\n");
+	console_write("  cat <path>\r\n");
+}
+
+static void shell_ls(const char *path)
+{
+	struct vfs_node *directory;
+	enum vfs_error error;
+
+	error = vfs_resolve(shell_cwd, path == (const char *)0 ? "." : path,
+				    &directory);
+	if (error != VFS_OK) {
+		shell_fs_error(error);
+		return;
+	}
+	if (vfs_node_type(directory) != VFS_NODE_DIRECTORY) {
+		shell_fs_error(VFS_NOT_DIRECTORY);
+		return;
+	}
+	for (unsigned int index = 0U;; ++index) {
+		struct vfs_node *entry;
+
+		error = vfs_readdir(directory, index, &entry);
+		if (error == VFS_NOT_FOUND) {
+			break;
+		}
+		if (error != VFS_OK) {
+			shell_fs_error(error);
+			return;
+		}
+		console_write(vfs_node_name(entry));
+		console_write("\r\n");
+	}
+}
+
+static void shell_pwd(void)
+{
+	char path[VFS_PATH_MAX];
+
+	if (vfs_format_path(shell_cwd, path, sizeof(path)) != VFS_OK) {
+		shell_fs_error(VFS_TOO_LARGE);
+		return;
+	}
+	console_write(path);
+	console_write("\r\n");
+}
+
+static void shell_cd(const char *path)
+{
+	struct vfs_node *node;
+	enum vfs_error error;
+
+	if (path == (const char *)0) {
+		shell_fs_error(VFS_INVALID_PATH);
+		return;
+	}
+	error = vfs_resolve(shell_cwd, path, &node);
+	if (error != VFS_OK) {
+		shell_fs_error(error);
+		return;
+	}
+	if (vfs_node_type(node) != VFS_NODE_DIRECTORY) {
+		shell_fs_error(VFS_NOT_DIRECTORY);
+		return;
+	}
+	shell_cwd = node;
+}
+
+static void shell_mkdir(const char *path)
+{
+	enum vfs_error error;
+
+	if (path == (const char *)0) {
+		shell_fs_error(VFS_INVALID_PATH);
+		return;
+	}
+	error = vfs_mkdir(shell_cwd, path, (struct vfs_node **)0);
+	if (error != VFS_OK) {
+		shell_fs_error(error);
+	}
+}
+
+static void shell_cat(const char *path)
+{
+	char buffer[128];
+	struct vfs_node *file;
+	u64 size;
+	enum vfs_error error;
+
+	if (path == (const char *)0) {
+		shell_fs_error(VFS_INVALID_PATH);
+		return;
+	}
+	error = vfs_resolve(shell_cwd, path, &file);
+	if (error == VFS_OK) {
+		error = vfs_read(file, buffer, sizeof(buffer), &size);
+	}
+	if (error != VFS_OK) {
+		shell_fs_error(error);
+		return;
+	}
+	for (u64 index = 0ULL; index < size; ++index) {
+		console_putc(buffer[index]);
+	}
+	console_write("\r\n");
 }
 
 static void shell_threads(void)
@@ -138,6 +255,8 @@ static void shell_memory(void)
 static void shell_execute(char *line, unsigned int length)
 {
 	unsigned int index = 0U;
+	char *argument = (char *)0;
+	unsigned int echo_command;
 
 	while (index < length && (line[index] == ' ' || line[index] == '\t')) {
 		++index;
@@ -149,10 +268,21 @@ static void shell_execute(char *line, unsigned int length)
 					line[length - 1U] == '\t')) {
 		line[--length] = '\0';
 	}
+	echo_command = starts_echo(line, length);
+	for (index = 0U; index < length; ++index) {
+		if (line[index] == ' ' || line[index] == '\t') {
+			line[index] = '\0';
+			argument = &line[index + 1U];
+			while (*argument == ' ' || *argument == '\t') {
+				++argument;
+			}
+			break;
+		}
+	}
 
 	if (text_equals(line, "help")) {
 		shell_help();
-	} else if (starts_echo(line, length)) {
+	} else if (echo_command != 0U) {
 		unsigned int argument = 4U;
 
 		while (argument < length &&
@@ -175,6 +305,16 @@ static void shell_execute(char *line, unsigned int length)
 		shell_counter();
 	} else if (text_equals(line, "version")) {
 		console_write(NIMERA_VERSION "\r\n");
+	} else if (text_equals(line, "ls")) {
+		shell_ls(argument);
+	} else if (text_equals(line, "pwd")) {
+		shell_pwd();
+	} else if (text_equals(line, "cd")) {
+		shell_cd(argument);
+	} else if (text_equals(line, "mkdir")) {
+		shell_mkdir(argument);
+	} else if (text_equals(line, "cat")) {
+		shell_cat(argument);
 	} else if (length != 0U) {
 		console_write("Unknown command: ");
 		console_write(line);
@@ -187,11 +327,20 @@ void shell_run(void)
 {
 	char line[SHELL_LINE_CAPACITY];
 	unsigned int swallow_lf = 0U;
+	shell_cwd = vfs_root();
 
 	for (;;) {
 		unsigned int length = 0U;
 
-		console_write("nimera $ ");
+		char path[VFS_PATH_MAX];
+
+		console_write("nimera:");
+		if (vfs_format_path(shell_cwd, path, sizeof(path)) == VFS_OK) {
+			console_write(path);
+		} else {
+			console_write("?");
+		}
+		console_write(" $ ");
 		for (;;) {
 			char c = console_getc();
 

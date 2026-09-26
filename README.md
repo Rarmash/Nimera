@@ -44,10 +44,13 @@ The current milestone successfully:
 - preemptively switches between the shell thread and one background kernel
   worker on the Generic Timer IRQ using a small round-robin scheduler; and
 - blocks the shell thread while the RX ring is empty, then wakes it from the
-  PL011 receive IRQ without performing an immediate context switch.
+  PL011 receive IRQ without performing an immediate context switch; and
+- mounts a small in-memory RAMFS at `/`, creates the initial Nimera directory
+  tree, and exposes it through a minimal VFS and shell path commands.
 
-There is currently no libc, `malloc/free`, scheduler for user processes,
-filesystem, userspace, UART TX interrupt path, or other larger OS subsystem.
+There is currently no libc, `malloc/free`, persistent filesystem, userspace,
+processes, UART TX interrupt path, or other larger OS subsystem. The current
+filesystem is RAM-only and disappears on reboot.
 The MMU
 is enabled after early initialization, but this is not yet a general virtual
 memory manager.
@@ -201,6 +204,42 @@ make run-blocking
 
 It reports that the worker progressed while the shell was waiting and then
 checks that the shell resumed after the UART wakeup.
+
+## VFS and RAMFS
+
+Nimera now has a small virtual filesystem layer. The shell calls VFS path and
+directory operations; the current backend is RAMFS. The root filesystem is
+mounted during boot and creates this real namespace:
+
+```text
+/
+├── system/
+├── apps/
+├── users/
+├── volumes/
+├── devices/
+├── config/
+├── var/
+└── tmp/
+```
+
+`/system/version` is a regular RAMFS file containing the canonical Nimera
+version string. `ls`, `pwd`, `cd`, `mkdir`, and `cat` use the VFS resolver, so
+relative paths, `.`, `..`, repeated slashes, and root clamping are real path
+operations rather than shell-only output. `ls` reports `Not a directory` when
+given a regular file.
+
+RAMFS metadata and file contents use the existing kernel heap. They are not
+persistent: all entries and contents disappear when QEMU stops. `NimFS` is
+reserved for a future persistent native filesystem. `/volumes` is currently an
+ordinary empty directory reserved for future automounts, and `/devices` is an
+ordinary directory, not yet a devfs.
+
+The isolated test is:
+
+```sh
+make run-vfs
+```
 
 ## PL011 receive IRQ
 
@@ -534,7 +573,7 @@ Instruction Abort when branching to a `ret` instruction stored in writable
 The ordinary `make run` starts the built-in kernel shell. Its line buffer is a
 fixed 128-byte array: printable ASCII is echoed into it, Enter executes the
 line, and Backspace removes the previous character. Input beyond the buffer is
-ignored safely. Parsing only recognizes the nine commands shown above; there
+ignored safely. Parsing recognizes the fourteen commands shown above; there
 is no quoting, escaping, piping, redirection, history, or external command
 execution.
 
@@ -569,9 +608,11 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │       ├── pmm.h
 │       ├── scheduler.h
 │       ├── shell.h
+│       ├── ramfs.h
 │       ├── timer.h
 │       ├── types.h
-│       └── version.h
+│       ├── version.h
+│       └── vfs.h
 ├── arch/
 │   └── aarch64/
 │       ├── boot.S
@@ -591,9 +632,11 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │   ├── memory.c
 │   ├── panic.c
 │   ├── pmm.c
+│   ├── ramfs.c
 │   ├── scheduler.c
 │   ├── shell.c
-│   └── timer.c
+│   ├── timer.c
+│   └── vfs.c
 └── platform/
     └── qemu-virt/
         ├── gic.c
@@ -631,6 +674,10 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   page-size constant.
 - `include/nimera/scheduler.h` — the fixed kernel-thread and saved IRQ-frame
   API used by the small preemptive scheduler.
+- `include/nimera/vfs.h` — the small filesystem node, path, directory, read,
+  and error API used by the kernel and shell.
+- `include/nimera/ramfs.h` — the current RAMFS root creation interface; it is
+  not the future persistent NimFS interface.
 - `include/nimera/timer.h` — the platform-independent timer API.
 - `include/nimera/version.h` — the source-controlled `Nimera 0.0-dev` version.
 - `include/nimera/types.h` — the minimal freestanding `u64` type definition.
@@ -656,6 +703,10 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `kernel/scheduler.c` — the two-thread round-robin scheduler, synthetic worker
   context, `WAITING`/wakeup transitions, stack checks, and isolated scheduler
   tests.
+- `kernel/vfs.c` — the root mount, path resolver, VFS dispatch, boot-created
+  directories, and `/system/version` creation.
+- `kernel/ramfs.c` — the heap-backed in-memory directory/file nodes and their
+  minimal VFS operations.
 - `kernel/timer.c` — validates timer frequency and exposes frequency, ticks,
   and monotonic milliseconds without architecture instructions.
 - `arch/aarch64/timer.c` — reads `CNTFRQ_EL0` and `CNTPCT_EL0` for the common
@@ -681,8 +732,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   LLD; provides `build`, `run`, `run-panic`, `run-timer`, `run-memory`,
   `run-pmm`, `run-heap`, `run-exception`, `run-mmu`, `run-mmu-fault`,
   `run-protection`, `run-protection-write`, `run-protection-exec`, `run-irq`,
-  `run-uart-irq`, `run-uart-overflow`, `run-sched`, `run-blocking`, and
-  `clean`.
+  `run-uart-irq`, `run-uart-overflow`, `run-sched`, `run-blocking`, `run-vfs`,
+  and `clean`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -718,6 +769,8 @@ This is a freestanding program rather than a hosted application:
   scheduler test; `make run-sched` enables it in `build-sched/`.
 - `-DNIMERA_BLOCKING_TEST=0` keeps the normal shell path out of the blocking
   test; `make run-blocking` enables it in `build-blocking/`.
+- `-DNIMERA_VFS_TEST=0` keeps the normal shell path out of the VFS test;
+  `make run-vfs` enables it in `build-vfs/`.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.

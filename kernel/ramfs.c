@@ -1,0 +1,262 @@
+#include <nimera/heap.h>
+#include <nimera/ramfs.h>
+
+struct ramfs_node {
+	struct vfs_node vfs;
+	struct ramfs_node *first_child;
+	struct ramfs_node *next_sibling;
+	char *contents;
+	u64 size;
+};
+
+struct ramfs {
+	struct ramfs_node *root;
+};
+
+static enum vfs_error ramfs_lookup(struct vfs_node *directory,
+					   const char *name,
+					   struct vfs_node **result);
+static enum vfs_error ramfs_readdir(struct vfs_node *directory,
+					    unsigned int index,
+					    struct vfs_node **result);
+static enum vfs_error ramfs_mkdir(struct vfs_node *directory, const char *name,
+					  struct vfs_node **result);
+static enum vfs_error ramfs_read(struct vfs_node *file, char *buffer,
+					 u64 capacity, u64 *size);
+
+static const struct vfs_operations ramfs_operations = {
+	.lookup = ramfs_lookup,
+	.readdir = ramfs_readdir,
+	.mkdir = ramfs_mkdir,
+	.read = ramfs_read
+};
+
+static unsigned int ramfs_string_length(const char *text)
+{
+	unsigned int length = 0U;
+
+	while (text[length] != '\0') {
+		++length;
+	}
+	return length;
+}
+
+static int ramfs_string_equals(const char *left, const char *right)
+{
+	unsigned int index = 0U;
+
+	while (left[index] != '\0' && right[index] != '\0') {
+		if (left[index] != right[index]) {
+			return 0;
+		}
+		++index;
+	}
+	return left[index] == '\0' && right[index] == '\0';
+}
+
+static struct ramfs_node *ramfs_from_vfs(struct vfs_node *node)
+{
+	return (struct ramfs_node *)(void *)node;
+}
+
+static enum vfs_error ramfs_make_node(struct ramfs_node *parent,
+					      const char *name,
+					      enum vfs_node_type type,
+					      struct ramfs_node **result)
+{
+	unsigned int length = ramfs_string_length(name);
+	struct ramfs_node *node;
+	char *stored_name;
+
+	if (length == 0U || length > VFS_NAME_MAX) {
+		return VFS_INVALID_PATH;
+	}
+	if (parent != (struct ramfs_node *)0) {
+		struct ramfs_node *child = parent->first_child;
+
+		while (child != (struct ramfs_node *)0) {
+			if (ramfs_string_equals(child->vfs.name, name)) {
+				return VFS_ALREADY_EXISTS;
+			}
+			child = child->next_sibling;
+		}
+	}
+	node = (struct ramfs_node *)kmalloc(sizeof(*node));
+	stored_name = (char *)kmalloc((u64)length + 1ULL);
+	if (node == (struct ramfs_node *)0 || stored_name == (char *)0) {
+		if (node != (struct ramfs_node *)0) {
+			kfree(node);
+		}
+		if (stored_name != (char *)0) {
+			kfree(stored_name);
+		}
+		return VFS_NO_MEMORY;
+	}
+	for (unsigned int index = 0U; index < length; ++index) {
+		stored_name[index] = name[index];
+	}
+	stored_name[length] = '\0';
+	node->vfs.name = stored_name;
+	node->vfs.type = type;
+	node->vfs.parent = parent == (struct ramfs_node *)0 ?
+		(struct vfs_node *)0 : &parent->vfs;
+	node->vfs.private_data = node;
+	node->vfs.operations = &ramfs_operations;
+	node->first_child = (struct ramfs_node *)0;
+	node->next_sibling = (struct ramfs_node *)0;
+	node->contents = (char *)0;
+	node->size = 0ULL;
+	if (parent != (struct ramfs_node *)0) {
+		struct ramfs_node *last = parent->first_child;
+
+		if (last == (struct ramfs_node *)0) {
+			parent->first_child = node;
+		} else {
+			while (last->next_sibling != (struct ramfs_node *)0) {
+				last = last->next_sibling;
+			}
+			last->next_sibling = node;
+		}
+	}
+	if (result != (struct ramfs_node **)0) {
+		*result = node;
+	}
+	return VFS_OK;
+}
+
+struct ramfs *ramfs_create(void)
+{
+	struct ramfs *filesystem = (struct ramfs *)kmalloc(sizeof(*filesystem));
+	struct ramfs_node *root;
+
+	if (filesystem == (struct ramfs *)0 ||
+	    ramfs_make_node((struct ramfs_node *)0, "/",
+			     VFS_NODE_DIRECTORY, &root) != VFS_OK) {
+		if (filesystem != (struct ramfs *)0) {
+			kfree(filesystem);
+		}
+		return (struct ramfs *)0;
+	}
+	filesystem->root = root;
+	return filesystem;
+}
+
+struct vfs_node *ramfs_root(struct ramfs *filesystem)
+{
+	return filesystem == (struct ramfs *)0 ? (struct vfs_node *)0 :
+		&filesystem->root->vfs;
+}
+
+static enum vfs_error ramfs_lookup(struct vfs_node *directory,
+					   const char *name,
+					   struct vfs_node **result)
+{
+	struct ramfs_node *node;
+
+	if (directory->type != VFS_NODE_DIRECTORY) {
+		return VFS_NOT_DIRECTORY;
+	}
+	node = ramfs_from_vfs(directory)->first_child;
+	while (node != (struct ramfs_node *)0) {
+		if (ramfs_string_equals(node->vfs.name, name)) {
+			*result = &node->vfs;
+			return VFS_OK;
+		}
+		node = node->next_sibling;
+	}
+	return VFS_NOT_FOUND;
+}
+
+static enum vfs_error ramfs_readdir(struct vfs_node *directory,
+					    unsigned int index,
+					    struct vfs_node **result)
+{
+	struct ramfs_node *node;
+
+	if (directory->type != VFS_NODE_DIRECTORY) {
+		return VFS_NOT_DIRECTORY;
+	}
+	node = ramfs_from_vfs(directory)->first_child;
+	while (node != (struct ramfs_node *)0 && index != 0U) {
+		node = node->next_sibling;
+		--index;
+	}
+	if (node == (struct ramfs_node *)0) {
+		return VFS_NOT_FOUND;
+	}
+	if (result != (struct vfs_node **)0) {
+		*result = &node->vfs;
+	}
+	return VFS_OK;
+}
+
+static enum vfs_error ramfs_mkdir(struct vfs_node *directory, const char *name,
+					  struct vfs_node **result)
+{
+	if (directory->type != VFS_NODE_DIRECTORY) {
+		return VFS_NOT_DIRECTORY;
+	}
+	return ramfs_make_node(ramfs_from_vfs(directory), name,
+				       VFS_NODE_DIRECTORY,
+				       (struct ramfs_node **)result);
+}
+
+static enum vfs_error ramfs_read(struct vfs_node *file, char *buffer,
+					 u64 capacity, u64 *size)
+{
+	struct ramfs_node *node;
+
+	if (file->type == VFS_NODE_DIRECTORY) {
+		return VFS_IS_DIRECTORY;
+	}
+	node = ramfs_from_vfs(file);
+	if (capacity < node->size) {
+		return VFS_TOO_LARGE;
+	}
+	for (u64 index = 0ULL; index < node->size; ++index) {
+		buffer[index] = node->contents[index];
+	}
+	*size = node->size;
+	return VFS_OK;
+}
+
+enum vfs_error ramfs_create_file(struct vfs_node *directory, const char *name,
+					 const char *contents, u64 size,
+					 struct vfs_node **result)
+{
+	struct ramfs_node *node;
+	enum vfs_error error;
+
+	if (directory->type != VFS_NODE_DIRECTORY) {
+		return VFS_NOT_DIRECTORY;
+	}
+	error = ramfs_make_node(ramfs_from_vfs(directory), name, VFS_NODE_FILE,
+					&node);
+	if (error != VFS_OK) {
+		return error;
+	}
+	node->contents = (char *)kmalloc(size == 0ULL ? 1ULL : size);
+	if (node->contents == (char *)0) {
+		struct ramfs_node *previous = (struct ramfs_node *)0;
+		struct ramfs_node *child = ramfs_from_vfs(directory)->first_child;
+
+		while (child != node) {
+			previous = child;
+			child = child->next_sibling;
+		}
+		if (previous == (struct ramfs_node *)0) {
+			ramfs_from_vfs(directory)->first_child = node->next_sibling;
+		} else {
+			previous->next_sibling = node->next_sibling;
+		}
+		kfree((void *)node->vfs.name);
+		kfree(node);
+		return VFS_NO_MEMORY;
+	}
+	for (u64 index = 0ULL; index < size; ++index) {
+		node->contents[index] = contents[index];
+	}
+	node->size = size;
+	*result = &node->vfs;
+	return VFS_OK;
+}

@@ -25,6 +25,7 @@ UART_IRQ_TEST ?= 0
 UART_OVERFLOW_TEST ?= 0
 SCHED_TEST ?= 0
 BLOCKING_TEST ?= 0
+VFS_TEST ?= 0
 QEMU_MEMORY ?= 128M
 QEMU_MACHINE ?= virt,gic-version=2
 
@@ -57,7 +58,8 @@ CFLAGS := \
 	-DNIMERA_UART_IRQ_TEST=$(UART_IRQ_TEST) \
 	-DNIMERA_UART_OVERFLOW_TEST=$(UART_OVERFLOW_TEST) \
 	-DNIMERA_SCHED_TEST=$(SCHED_TEST) \
-	-DNIMERA_BLOCKING_TEST=$(BLOCKING_TEST)
+	-DNIMERA_BLOCKING_TEST=$(BLOCKING_TEST) \
+	-DNIMERA_VFS_TEST=$(VFS_TEST)
 
 LDFLAGS := \
 	-T linker.ld \
@@ -66,9 +68,9 @@ LDFLAGS := \
 	-z max-page-size=0x1000 \
 	-Map=$(MAP)
 
-OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/exception-vector.o $(BUILD_DIR)/halt.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/exception.o $(BUILD_DIR)/irq.o $(BUILD_DIR)/scheduler.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/arch-irq.o $(BUILD_DIR)/mmu.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/qemu-memory.o $(BUILD_DIR)/qemu-irq.o $(BUILD_DIR)/gic.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/heap.o $(BUILD_DIR)/format.o $(BUILD_DIR)/shell.o $(BUILD_DIR)/uart.o $(BUILD_DIR)/arch-exception.o
+OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/exception-vector.o $(BUILD_DIR)/halt.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/exception.o $(BUILD_DIR)/irq.o $(BUILD_DIR)/scheduler.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/arch-irq.o $(BUILD_DIR)/mmu.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/qemu-memory.o $(BUILD_DIR)/qemu-irq.o $(BUILD_DIR)/gic.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/heap.o $(BUILD_DIR)/format.o $(BUILD_DIR)/shell.o $(BUILD_DIR)/uart.o $(BUILD_DIR)/arch-exception.o
 
-.PHONY: build run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking clean
+.PHONY: build run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs clean
 
 build: $(ELF)
 
@@ -84,7 +86,7 @@ $(BUILD_DIR)/exception-vector.o: arch/aarch64/exception.S | $(BUILD_DIR)/.dir
 $(BUILD_DIR)/halt.o: arch/aarch64/halt.S | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/main.o: kernel/main.c include/nimera/exception.h include/nimera/format.h include/nimera/heap.h include/nimera/irq.h include/nimera/memory.h include/nimera/mmu.h include/nimera/panic.h include/nimera/pmm.h include/nimera/scheduler.h include/nimera/shell.h include/nimera/timer.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/main.o: kernel/main.c include/nimera/exception.h include/nimera/format.h include/nimera/heap.h include/nimera/irq.h include/nimera/memory.h include/nimera/mmu.h include/nimera/panic.h include/nimera/pmm.h include/nimera/scheduler.h include/nimera/shell.h include/nimera/timer.h include/nimera/vfs.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/console.o: kernel/console.c include/nimera/console.h | $(BUILD_DIR)/.dir
@@ -100,6 +102,12 @@ $(BUILD_DIR)/irq.o: kernel/irq.c include/nimera/irq.h include/nimera/panic.h inc
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/scheduler.o: kernel/scheduler.c include/nimera/console.h include/nimera/format.h include/nimera/irq.h include/nimera/panic.h include/nimera/scheduler.h include/nimera/timer.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/vfs.o: kernel/vfs.c include/nimera/heap.h include/nimera/panic.h include/nimera/ramfs.h include/nimera/version.h include/nimera/vfs.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ramfs.o: kernel/ramfs.c include/nimera/heap.h include/nimera/ramfs.h include/nimera/vfs.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/timer.o: kernel/timer.c include/nimera/panic.h include/nimera/timer.h include/nimera/types.h | $(BUILD_DIR)/.dir
@@ -138,7 +146,7 @@ $(BUILD_DIR)/heap.o: kernel/heap.c include/nimera/heap.h include/nimera/panic.h 
 $(BUILD_DIR)/format.o: kernel/format.c include/nimera/console.h include/nimera/format.h include/nimera/types.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/shell.o: kernel/shell.c include/nimera/console.h include/nimera/format.h include/nimera/heap.h include/nimera/irq.h include/nimera/memory.h include/nimera/mmu.h include/nimera/pmm.h include/nimera/scheduler.h include/nimera/shell.h include/nimera/timer.h include/nimera/version.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/shell.o: kernel/shell.c include/nimera/console.h include/nimera/format.h include/nimera/heap.h include/nimera/irq.h include/nimera/memory.h include/nimera/mmu.h include/nimera/pmm.h include/nimera/scheduler.h include/nimera/shell.h include/nimera/timer.h include/nimera/version.h include/nimera/vfs.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/uart.o: platform/qemu-virt/uart.c include/nimera/irq.h include/nimera/panic.h include/nimera/scheduler.h include/nimera/types.h | $(BUILD_DIR)/.dir
@@ -332,5 +340,17 @@ run-blocking:
 		-serial stdio \
 		-device loader,file=build-blocking/baremetal-aarch64.elf,cpu-num=0
 
+run-vfs:
+	rm -rf build-vfs
+	$(MAKE) BUILD_DIR=build-vfs PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 IRQ_TEST=0 UART_IRQ_TEST=0 UART_OVERFLOW_TEST=0 SCHED_TEST=0 BLOCKING_TEST=0 VFS_TEST=1 build
+	$(QEMU) \
+		-machine $(QEMU_MACHINE) \
+		-m $(QEMU_MEMORY) \
+		-cpu cortex-a72 \
+		-nographic \
+		-monitor none \
+		-serial stdio \
+		-device loader,file=build-vfs/baremetal-aarch64.elf,cpu-num=0
+
 clean:
-	rm -rf build build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking
+	rm -rf build build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs
