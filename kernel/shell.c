@@ -5,6 +5,7 @@
 #include <nimera/irq.h>
 #include <nimera/memory.h>
 #include <nimera/mmu.h>
+#include <nimera/nimfs.h>
 #include <nimera/pmm.h>
 #include <nimera/scheduler.h>
 #include <nimera/shell.h>
@@ -70,6 +71,8 @@ static void shell_help(void)
 	console_write("  edit <path>\r\n");
 	console_write("  terminal\r\n");
 	console_write("  disks\r\n");
+	console_write("  mounts\r\n");
+	console_write("  fsinfo\r\n");
 }
 
 static void shell_disks(void)
@@ -84,6 +87,33 @@ static void shell_disks(void)
 		console_write("  "); console_write(device->name); console_write(" ");
 		format_u64_decimal(device->block_size); console_write(" bytes/block, ");
 		format_u64_decimal(device->block_count); console_write(" blocks\r\n");
+	}
+}
+
+static void shell_mounts(void)
+{
+	console_write("/  ");
+	console_write(vfs_mount_filesystem() == (const char *)0 ? "unknown" : vfs_mount_filesystem());
+	if (vfs_mount_device() != (const char *)0) {
+		console_write("  ");
+		console_write(vfs_mount_device());
+	}
+	console_write("\r\n");
+}
+
+static void shell_fsinfo(void)
+{
+	console_write("Filesystem: ");
+	console_write(vfs_mount_filesystem());
+	console_write("\r\n");
+	if (text_equals(vfs_mount_filesystem(), "NimFS")) {
+		console_write("Format version: 1\r\nDevice: disk0\r\nBlock size: 512\r\nTotal blocks: ");
+		format_u64_decimal(nimfs_total_blocks());
+		console_write("\r\nFree blocks: ");
+		format_u64_decimal(nimfs_free_blocks());
+		console_write("\r\nFree inodes: ");
+		format_u64_decimal(nimfs_free_inodes());
+		console_write("\r\n");
 	}
 }
 
@@ -498,6 +528,10 @@ static void shell_execute(char *line, unsigned int length)
 		shell_terminal();
 	} else if (text_equals(line, "disks")) {
 		shell_disks();
+	} else if (text_equals(line, "mounts")) {
+		shell_mounts();
+	} else if (text_equals(line, "fsinfo")) {
+		shell_fsinfo();
 	} else if (length != 0U) {
 		console_write("Unknown command: ");
 		console_write(line);

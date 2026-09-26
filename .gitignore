@@ -23,3 +23,5 @@ build-terminal-size-fallback/
 build-editor/
 build-block/
 build-storage/
+build-nimfs/
+build-nimfs-format/

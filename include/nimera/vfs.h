@@ -54,6 +54,9 @@ struct vfs_node {
 };
 
 void vfs_init(void);
+void vfs_set_mount_info(const char *filesystem, const char *device);
+const char *vfs_mount_filesystem(void);
+const char *vfs_mount_device(void);
 struct vfs_node *vfs_root(void);
 enum vfs_error vfs_mount_root(struct vfs_node *root);
 enum vfs_error vfs_resolve(struct vfs_node *cwd, const char *path,

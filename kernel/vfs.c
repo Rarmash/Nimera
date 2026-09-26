@@ -4,6 +4,8 @@
 #include <nimera/vfs.h>
 
 static struct vfs_node *root_node;
+static const char *mount_filesystem;
+static const char *mount_device;
 
 static unsigned int vfs_string_length(const char *text)
 {
@@ -50,6 +52,8 @@ void vfs_init(void)
 {
 	struct ramfs *filesystem = ramfs_create();
 	struct vfs_node *node;
+	mount_filesystem = "RAMFS";
+	mount_device = (const char *)0;
 	static const char *directories[] = {
 		"system", "apps", "users", "volumes", "devices", "config",
 		"var", "tmp"
@@ -70,6 +74,15 @@ void vfs_init(void)
 		panic("unable to create version file");
 	}
 }
+
+void vfs_set_mount_info(const char *filesystem, const char *device)
+{
+	mount_filesystem = filesystem;
+	mount_device = device;
+}
+
+const char *vfs_mount_filesystem(void) { return mount_filesystem; }
+const char *vfs_mount_device(void) { return mount_device; }
 
 struct vfs_node *vfs_root(void)
 {

@@ -58,10 +58,15 @@ The current milestone successfully:
 - provides NimEdit 0.1, a small built-in kernel text editor with VFS-backed
   load/save, ASCII editing, cursor movement, vertical scrolling, dirty-state
   tracking, and Ctrl-S/Ctrl-Q controls.
+- provides NimFS v0, a versioned native persistent filesystem over the whole
+  `disk0` VirtIO block device. Regular files, directories, overwrite, append,
+  rename, unlink, and empty-directory removal are exposed through the same VFS
+  used by RAMFS.
 
-There is currently no libc, `malloc/free`, persistent filesystem, userspace,
+There is currently no libc, userspace,
 processes, UART TX interrupt path, or other larger OS subsystem. The current
-filesystem is RAM-only and disappears on reboot.
+RAMFS root is RAM-only and disappears on reboot; the separate NimFS boot mode
+uses the persistent disk image described below. The MMU
 The MMU
 is enabled after early initialization, but this is not yet a general virtual
 memory manager.
@@ -179,6 +184,49 @@ Ctrl-S saves, while Ctrl-Q exits cleanly; a dirty buffer requires a second
 Ctrl-Q. There is no search, undo, tabs, UTF-8 editing, or horizontal scrolling.
 The RAMFS is ephemeral, so saved files disappear when QEMU stops.
 
+## NimFS v0
+
+NimFS is Nimera's first native persistent filesystem. It uses the entire
+`disk0` image as one volume; there are no partitions. The format is explicitly
+versioned as format version 1 and uses little-endian field serialization rather
+than relying on host C struct padding.
+
+For a 64 MiB image the layout is:
+
+```text
+block 0       superblock (magic NMFS, version 1)
+blocks 1..4   allocation bitmap (one bit per 512-byte block)
+blocks 5..132 fixed inode table (256 inodes, 256 bytes each)
+block 133..   data blocks
+```
+
+Each inode has 60 direct data-block references, so the current maximum regular
+file size is 30 KiB. Directory entries are fixed 64-byte records with a
+bounded 58-byte on-disk component name. The bitmap and inode table are cached
+in RAM for the running kernel, but every allocation and inode change is written
+back through the block API to `disk0`; they are not a RAM mirror used as the
+authoritative store.
+
+The development image is `build-storage/nimfs.img`. Formatting is always
+explicit and destructive:
+
+```sh
+make nimfs-disk-reset
+make run-nimfs-format
+make run-nimfs
+```
+
+`run-nimfs-format` creates the superblock, bitmap, inode table, root inode, and
+the initial `/system`, `/apps`, `/users`, `/volumes`, `/devices`, `/config`,
+`/var`, and `/tmp` tree. `run-nimfs` only mounts an existing valid image; it
+does not reformat it. The NimFS shell also provides `mounts` and `fsinfo`.
+`/tmp`, `/devices`, and `/volumes` are ordinary NimFS directories for now;
+tmpfs, devfs, and automounting are future work.
+
+NimFS v0 has no journal or crash recovery. A power loss or QEMU termination
+during metadata writes may corrupt the image. It also does not implement
+permissions, timestamps, free-page management, or partitions.
+
 The isolated editor self-test can be run with:
 
 ```sh
@@ -271,8 +319,8 @@ checks that the shell resumed after the UART wakeup.
 ## VFS and RAMFS
 
 Nimera now has a small virtual filesystem layer. The shell calls VFS path and
-directory operations; the current backend is RAMFS. The root filesystem is
-mounted during boot and creates this real namespace:
+directory operations. Normal `make run` uses RAMFS; `make run-nimfs` mounts
+NimFS from `disk0`. Both backends expose this root namespace:
 
 ```text
 /
@@ -293,15 +341,15 @@ relative paths, `.`, `..`, repeated slashes, and root clamping are real path
 operations rather than shell-only output. `ls` reports `Not a directory` when
 given a regular file.
 
-RAMFS metadata and file contents use the existing kernel heap. They are not
-persistent: all entries and contents disappear when QEMU stops. `write`
+RAMFS metadata and file contents use the existing kernel heap and disappear
+when QEMU stops. NimFS stores corresponding metadata and contents on its raw
+image. `write`
 replaces exact bytes and `append` adds exact bytes without an implicit newline.
 `rm` removes regular files; `rmdir` only removes empty directories; and `mv`
 requires a new, non-existing destination and rejects directory cycles. There
-are no permissions, ownership, timestamps, or recursive removal yet. `NimFS` is
-reserved for a future persistent native filesystem. `/volumes` is currently an
-ordinary empty directory reserved for future automounts, and `/devices` is an
-ordinary directory, not yet a devfs.
+are no permissions, ownership, timestamps, or recursive removal yet.
+`/volumes` is an ordinary directory reserved for future automounts, and
+`/devices` is an ordinary directory, not yet a devfs.
 
 The isolated test is:
 
@@ -432,8 +480,9 @@ nimera $
 The built-in commands include `help`, `echo`, `uptime`, `ticks`, `irqs`, `mem`,
 `threads`, `counter`, `version`, and the VFS commands listed above. `ticks` reports the number of handled EL1 timer IRQs, while `irqs`
 also reports UART RX IRQ and dropped-byte counters.
-They are compiled into the kernel; there is no persistent disk filesystem,
-userspace, or external program execution.
+They are compiled into the kernel; there is no userspace or external program
+execution. Persistent storage is available only through the explicit NimFS
+development boot target.
 
 The common console API is intentionally only three operations:
 `console_putc()`, `console_write()`, and `console_getc()`. It keeps kernel code
@@ -453,15 +502,16 @@ intentionally removes and recreates it. The isolated test uses the image's
 last sector, never block 0: the first run writes a marker and a second run
 reports `Persistent marker: present`. Normal `make run` does not attach or
 require this image. The shell's `disks` command only reports discovered
-devices; RAMFS remains the root filesystem.
+devices; RAMFS remains the root filesystem for normal `make run`, while
+`make run-nimfs` mounts the separate persistent NimFS image.
 
 Device Tree is the machine's hardware inventory: QEMU hands the kernel a
 binary table saying which memory and MMIO devices exist and where they live.
 Nimera currently parses only the fields needed for QEMU `virtio,mmio` and
 `memory` nodes. Physical memory is the RAM region reported by that table; it
 is not the same as usable memory after reservations, and neither is the same
-as currently free memory. There is still no allocator change, filesystem, or
-MMU mapping policy for storage data in this milestone.
+as currently free memory. NimFS storage has its own whole-disk layout; this
+memory-discovery section does not describe free storage or allocator state.
 
 ## Requirements on macOS Apple Silicon
 
@@ -773,7 +823,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `include/nimera/vfs.h` — the small filesystem node, path, directory, read,
   and error API used by the kernel and shell.
 - `include/nimera/ramfs.h` — the current RAMFS root creation interface; it is
-  not the future persistent NimFS interface.
+- `include/nimera/nimfs.h` — the native persistent NimFS format, mount, format,
+  and diagnostic API.
 - `include/nimera/timer.h` — the platform-independent timer API.
 - `include/nimera/version.h` — the source-controlled `Nimera 0.0-dev` version.
 - `include/nimera/types.h` — the minimal freestanding `u64` type definition.
@@ -781,6 +832,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   implementation.
 - `kernel/block.c` — registers and dispatches the small generic block-device
   set; it contains no VirtIO register knowledge.
+- `kernel/nimfs.c` — the small versioned whole-disk filesystem and VFS backend;
+  it contains no VirtIO queue knowledge.
 - `kernel/terminal.c` — bounded ANSI key decoding, one-shot geometry
   detection, fallback, and pending input; it does not access PL011 directly.
 - `kernel/exception.c` — prints synchronous-exception diagnostics through the

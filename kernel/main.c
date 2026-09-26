@@ -9,6 +9,7 @@
 #include <nimera/irq.h>
 #include <nimera/memory.h>
 #include <nimera/mmu.h>
+#include <nimera/nimfs.h>
 #include <nimera/panic.h>
 #include <nimera/pmm.h>
 #include <nimera/shell.h>
@@ -655,12 +656,50 @@ void kernel_main(void)
 #endif
 	mmu_init(&map);
 	heap_init();
+	block_init();
+	(void)virtio_block_init();
+
+#if NIMERA_NIMFS_FORMAT_TEST
+	{
+		const struct block_device *device = block_find("disk0");
+		int format_result;
+		int mount_result;
+		enum vfs_error tree_result;
+		console_write("NimFS format test\r\nDevice: disk0\r\nCapacity: ");
+		format_result = device == (const struct block_device *)0 ?
+			NIMFS_UNFORMATTED : nimfs_format((struct block_device *)device);
+		mount_result = format_result == NIMFS_OK ?
+			nimfs_mount((struct block_device *)device) : format_result;
+		tree_result = mount_result == NIMFS_OK ? nimfs_create_initial_tree() : VFS_INVALID_PATH;
+		if (format_result != NIMFS_OK || mount_result != NIMFS_OK || tree_result != VFS_OK) {
+			console_write("format="); format_u64_decimal((u64)format_result);
+			console_write(" mount="); format_u64_decimal((u64)mount_result);
+			console_write(" tree="); format_u64_decimal((u64)tree_result);
+			panic("NimFS format failed");
+		}
+		format_u64_decimal(device->block_count * device->block_size);
+		console_write(" bytes\r\nSuperblock: initialized\r\nAllocation bitmap: initialized\r\nInode table: initialized\r\nRoot inode: created\r\nInitial tree: created\r\nNimFS format complete.\r\n");
+		return;
+	}
+#endif
+#if NIMERA_NIMFS_BOOT
+	{
+		const struct block_device *device = block_find("disk0");
+		int result = device == (const struct block_device *)0 ?
+			NIMFS_UNFORMATTED : nimfs_mount((struct block_device *)device);
+		if (result != NIMFS_OK) {
+			panic(nimfs_error_string(result));
+		}
+	}
+#else
 	u64 heap_before_filesystem = heap_allocated_bytes();
 	vfs_init();
 	u64 heap_after_filesystem = heap_allocated_bytes();
 	(void)heap_after_filesystem;
-	block_init();
-	(void)virtio_block_init();
+#endif
+	#if NIMERA_NIMFS_BOOT
+	u64 heap_before_filesystem = heap_allocated_bytes();
+	#endif
 
 #if NIMERA_VFS_TEST
 	vfs_test(heap_before_filesystem);
@@ -788,7 +827,11 @@ void kernel_main(void)
 	console_write("MMU: enabled\r\n");
 	console_write("irq: enabled\r\n");
 	console_write("sched: enabled\r\n");
+#if NIMERA_NIMFS_BOOT
+	console_write("fs: NimFS mounted on disk0\r\n");
+#else
 	console_write("fs: root mounted\r\n");
+#endif
 	console_write("kernel: starting shell\r\n");
 	terminal_init();
 	shell_run();
