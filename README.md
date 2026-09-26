@@ -169,6 +169,10 @@ initialization it sends `CSI 18 t` and accepts only the bounded response form
 rows. The fallback is 80x25, and failure to detect geometry never panics or
 blocks boot indefinitely. Unrelated bytes read while recognizing the response
 are retained in a small terminal-level FIFO before normal key decoding.
+The ordinary interactive `make run`, `make run-editor`, and `make run-nimfs`
+targets select this 80x25 fallback directly because some host terminals do
+not implement `CSI 18 t` cleanly; the negotiation remains available through
+the dedicated terminal-size targets.
 NimEdit uses this logical API rather than knowing PL011 registers or the ANSI
 protocol. Geometry is detected once per boot; live resize is not implemented.
 There is no framebuffer, native graphics backend, Unicode input, or general

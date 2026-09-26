@@ -192,14 +192,15 @@ $(BUILD_DIR)/.dir:
 	mkdir -p $@
 
 run:
-	$(MAKE) BUILD_DIR=build PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 build
+	rm -rf build-run
+	$(MAKE) BUILD_DIR=build-run PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 TERMINAL_SIZE_NO_RESPONSE=1 build
 	$(QEMU) \
 		-machine $(QEMU_MACHINE) \
 		-cpu cortex-a72 \
 		-nographic \
 		-monitor none \
 		-serial stdio \
-		-device loader,file=build/baremetal-aarch64.elf,cpu-num=0
+		-device loader,file=build-run/baremetal-aarch64.elf,cpu-num=0
 
 run-panic:
 	$(MAKE) BUILD_DIR=build-panic PANIC_TEST=1 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 build
@@ -436,7 +437,7 @@ run-terminal-size-fallback:
 
 run-editor:
 	rm -rf build-editor
-	$(MAKE) BUILD_DIR=build-editor PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 IRQ_TEST=0 UART_IRQ_TEST=0 UART_OVERFLOW_TEST=0 SCHED_TEST=0 BLOCKING_TEST=0 VFS_TEST=0 VFS_WRITE_TEST=0 TERMINAL_TEST=0 EDITOR_TEST=1 build
+	$(MAKE) BUILD_DIR=build-editor PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 IRQ_TEST=0 UART_IRQ_TEST=0 UART_OVERFLOW_TEST=0 SCHED_TEST=0 BLOCKING_TEST=0 VFS_TEST=0 VFS_WRITE_TEST=0 TERMINAL_TEST=0 TERMINAL_SIZE_NO_RESPONSE=1 EDITOR_TEST=1 build
 	$(QEMU) \
 		-machine $(QEMU_MACHINE) \
 		-m $(QEMU_MEMORY) \
@@ -474,8 +475,8 @@ run-nimfs-format: nimfs-disk-create
 
 run-nimfs: nimfs-disk-create
 	rm -rf build-nimfs
-	$(MAKE) BUILD_DIR=build-nimfs NIMFS_FORMAT_TEST=0 NIMFS_BOOT=1 BLOCK_TEST=0 build
+	$(MAKE) BUILD_DIR=build-nimfs NIMFS_FORMAT_TEST=0 NIMFS_BOOT=1 TERMINAL_SIZE_NO_RESPONSE=1 BLOCK_TEST=0 build
 	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_STORAGE_IMAGE),format=raw,id=nimfs-disk -device virtio-blk-device,drive=nimfs-disk -device loader,file=build-nimfs/baremetal-aarch64.elf,cpu-num=0
 
 clean:
-	rm -rf build build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-nimfs build-nimfs-format
+	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-nimfs build-nimfs-format

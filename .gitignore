@@ -25,3 +25,4 @@ build-block/
 build-storage/
 build-nimfs/
 build-nimfs-format/
+build-run/
