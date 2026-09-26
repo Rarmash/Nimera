@@ -13,3 +13,4 @@ build-protection-exec/
 build-irq/
 build-uart-irq/
 build-uart-overflow/
+build-sched/

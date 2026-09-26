@@ -4,6 +4,7 @@
 #include <nimera/memory.h>
 #include <nimera/mmu.h>
 #include <nimera/pmm.h>
+#include <nimera/scheduler.h>
 #include <nimera/shell.h>
 #include <nimera/timer.h>
 #include <nimera/version.h>
@@ -40,7 +41,36 @@ static void shell_help(void)
 	console_write("  ticks\r\n");
 	console_write("  irqs\r\n");
 	console_write("  mem\r\n");
+	console_write("  threads\r\n");
+	console_write("  counter\r\n");
 	console_write("  version\r\n");
+}
+
+static void shell_threads(void)
+{
+	unsigned int index;
+
+	console_write("Threads:\r\n");
+	for (index = 0U; index < scheduler_thread_count(); ++index) {
+		const struct thread *thread = scheduler_thread(index);
+
+		console_write("  ");
+		format_u64_decimal(thread->id);
+		console_write(" ");
+		console_write(thread->name);
+		console_write(" ");
+		console_write(thread->state == THREAD_RUNNING ? "RUNNING" : "READY");
+		console_write(" switches=");
+		format_u64_decimal(thread->switch_count);
+		console_write("\r\n");
+	}
+}
+
+static void shell_counter(void)
+{
+	console_write("Worker counter: ");
+	format_u64_decimal(scheduler_worker_counter());
+	console_write("\r\n");
 }
 
 static void shell_uptime(void)
@@ -138,6 +168,10 @@ static void shell_execute(char *line, unsigned int length)
 		shell_irqs();
 	} else if (text_equals(line, "mem")) {
 		shell_memory();
+	} else if (text_equals(line, "threads")) {
+		shell_threads();
+	} else if (text_equals(line, "counter")) {
+		shell_counter();
 	} else if (text_equals(line, "version")) {
 		console_write(NIMERA_VERSION "\r\n");
 	} else if (length != 0U) {

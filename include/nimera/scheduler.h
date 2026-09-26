@@ -1,0 +1,40 @@
+#ifndef NIMERA_SCHEDULER_H
+#define NIMERA_SCHEDULER_H
+
+#include <nimera/types.h>
+
+enum thread_state {
+	THREAD_RUNNING,
+	THREAD_READY
+};
+
+struct irq_frame {
+	u64 x[31];
+	u64 reserved0;
+	u64 elr;
+	u64 spsr;
+	u64 reserved[2];
+};
+
+struct thread {
+	u64 id;
+	enum thread_state state;
+	struct irq_frame *frame;
+	u64 stack_base;
+	u64 stack_top;
+	const char *name;
+	u64 run_count;
+	u64 switch_count;
+};
+
+void scheduler_init(void);
+struct irq_frame *scheduler_schedule(struct irq_frame *current_frame);
+unsigned int scheduler_thread_count(void);
+const struct thread *scheduler_thread(unsigned int index);
+u64 scheduler_context_switches(void);
+u64 scheduler_worker_counter(void);
+int scheduler_stack_ok(void);
+void scheduler_test(void);
+__attribute__((noreturn)) void thread_entry_returned(void);
+
+#endif

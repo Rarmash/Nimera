@@ -45,8 +45,9 @@ exception_sync:
 
 exception_irq:
 	// IRQs may interrupt arbitrary C code. Save every general-purpose
-	// register before calling C, then restore the interrupted context.
-	sub sp, sp, #256
+	// register and the exception return state before calling C. The frame is
+	// also the complete saved context that the scheduler can switch to.
+	sub sp, sp, #288
 	stp x0, x1, [sp, #0]
 	stp x2, x3, [sp, #16]
 	stp x4, x5, [sp, #32]
@@ -63,7 +64,17 @@ exception_irq:
 	stp x26, x27, [sp, #208]
 	stp x28, x29, [sp, #224]
 	str x30, [sp, #240]
+	mrs x9, elr_el1
+	mrs x10, spsr_el1
+	str x9, [sp, #256]
+	str x10, [sp, #264]
+	mov x0, sp
 	bl irq_handle
+	mov sp, x0
+	ldr x9, [sp, #256]
+	ldr x10, [sp, #264]
+	msr elr_el1, x9
+	msr spsr_el1, x10
 	ldr x30, [sp, #240]
 	ldp x28, x29, [sp, #224]
 	ldp x26, x27, [sp, #208]
@@ -80,8 +91,20 @@ exception_irq:
 	ldp x4, x5, [sp, #32]
 	ldp x2, x3, [sp, #16]
 	ldp x0, x1, [sp, #0]
-	add sp, sp, #256
+	add sp, sp, #288
 	eret
+
+	.balign 4
+	.global thread_bootstrap
+	.type thread_bootstrap, %function
+	.extern thread_entry_returned
+
+thread_bootstrap:
+	// x1 holds the entry function and x0 holds its argument in the
+	// synthetic frame created by scheduler_init().
+	blr x1
+	bl thread_entry_returned
+	.size thread_bootstrap, . - thread_bootstrap
 
 exception_fiq:
 	mov x0, #2

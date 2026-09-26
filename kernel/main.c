@@ -10,6 +10,7 @@
 #include <nimera/panic.h>
 #include <nimera/pmm.h>
 #include <nimera/shell.h>
+#include <nimera/scheduler.h>
 #include <nimera/timer.h>
 
 #define NULL ((void *)0)
@@ -326,7 +327,13 @@ void kernel_main(void)
 	return;
 #endif
 	irq_init();
+	scheduler_init();
 	irq_enable();
+
+#if NIMERA_SCHED_TEST
+	scheduler_test();
+	return;
+#endif
 
 #if NIMERA_UART_IRQ_TEST
 	uart_irq_test();

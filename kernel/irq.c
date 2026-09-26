@@ -2,6 +2,7 @@
 #include <nimera/console.h>
 #include <nimera/format.h>
 #include <nimera/panic.h>
+#include <nimera/scheduler.h>
 
 extern void platform_gic_init(const struct irq_platform_info *info);
 extern u64 platform_gic_acknowledge(void);
@@ -35,28 +36,39 @@ void irq_disable(void)
 	arch_irq_disable();
 }
 
+u64 irq_save_disable(void)
+{
+	return arch_irq_save_disable();
+}
+
+void irq_restore(u64 state)
+{
+	arch_irq_restore(state);
+}
+
 u64 irq_timer_ticks(void)
 {
 	return timer_irq_count;
 }
 
-void irq_handle(void)
+struct irq_frame *irq_handle(struct irq_frame *frame)
 {
 	u64 interrupt_id = platform_gic_acknowledge();
 
 	if (interrupt_id == 1023ULL) {
-		return;
+		return frame;
 	}
 	if (interrupt_id == platform_info.timer_intid) {
 		++timer_irq_count;
 		arch_timer_irq_rearm();
+		frame = scheduler_schedule(frame);
 		platform_gic_end(interrupt_id);
-		return;
+		return frame;
 	}
 	if (interrupt_id == platform_info.uart_intid) {
 		uart_handle_irq();
 		platform_gic_end(interrupt_id);
-		return;
+		return frame;
 	}
 	console_write("Unexpected GIC interrupt: ");
 	format_u64_decimal(interrupt_id);

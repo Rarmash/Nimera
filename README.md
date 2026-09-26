@@ -40,10 +40,13 @@ The current milestone successfully:
   real hardware IRQ; and
 - receives PL011 UART input through a GIC-delivered RX interrupt and fixed ring
   buffer while retaining polling TX; and
-- runs a small built-in kernel shell.
+- runs a small built-in kernel shell; and
+- preemptively switches between the shell thread and one background kernel
+  worker on the Generic Timer IRQ using a small round-robin scheduler.
 
-There is currently no libc, `malloc/free`, scheduler, filesystem, userspace,
-UART TX interrupt path, or other larger OS subsystem. The MMU
+There is currently no libc, `malloc/free`, scheduler for user processes,
+filesystem, userspace, UART TX interrupt path, or other larger OS subsystem.
+The MMU
 is enabled after early initialization, but this is not yet a general virtual
 memory manager.
 
@@ -78,9 +81,10 @@ The entry point is `_start` in `arch/aarch64/boot.S`:
    UART SPI, and architected timer PPI from the DTB, maps the MMIO pages as
    Device memory, programs a 10 Hz absolute-deadline timer, and enables IRQs
    only after setup.
-8. An IRQ vector stub saves all general-purpose registers, dispatches the GIC
-   timer or UART interrupt, calls the relevant handler, and then returns with
-   `eret`.
+8. An IRQ vector stub saves all general-purpose registers plus `ELR_EL1` and
+   `SPSR_EL1`, dispatches the GIC timer or UART interrupt, and returns with
+   `eret`. A timer IRQ may replace the saved frame with another kernel thread's
+   frame before that return.
 9. The shell reads input through the Console API, collects one fixed-size line,
    parses one of its built-in commands, and prints the next prompt.
 
@@ -154,6 +158,30 @@ primitive, and Nimera has no SMP or locking support yet.
 the counter, and then reports the observed count. The normal shell's `ticks`
 command reads the same count. This is an interrupt demonstration, not a
 scheduler or a general interrupt framework.
+
+## Kernel threads and preemption
+
+The scheduler currently has exactly two fixed kernel threads: the shell thread
+and a background worker. Both run in EL1 on one CPU. The worker only increments
+a counter; it does not print, allocate memory, or handle input. Each timer IRQ
+round-robins to the other READY thread by saving the full general-purpose IRQ
+frame and returning through `eret` with the selected frame. UART IRQs do not
+cause scheduling.
+
+The worker has a static 16 KiB stack in writable, non-executable `.bss`. A
+synthetic initial frame enters a small assembly trampoline, which calls the
+worker entry function and panics if it ever returns. The scheduler test checks
+that the worker counter increases, context switches occur, local test values
+survive preemption, and the worker stack canary remains intact:
+
+```sh
+make run-sched
+```
+
+The shell remains a simple blocking consumer of the UART ring and has no
+WAITING thread state yet. These are kernel threads, not processes: there are no
+address spaces, userspace stacks, SMP, locks, or scheduler-aware shell sleep
+queues.
 
 ## PL011 receive IRQ
 
@@ -483,7 +511,7 @@ Instruction Abort when branching to a `ret` instruction stored in writable
 The ordinary `make run` starts the built-in kernel shell. Its line buffer is a
 fixed 128-byte array: printable ASCII is echoed into it, Enter executes the
 line, and Backspace removes the previous character. Input beyond the buffer is
-ignored safely. Parsing only recognizes the six commands shown above; there
+ignored safely. Parsing only recognizes the nine commands shown above; there
 is no quoting, escaping, piping, redirection, history, or external command
 execution.
 
@@ -516,6 +544,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │       ├── mmu.h
 │       ├── panic.h
 │       ├── pmm.h
+│       ├── scheduler.h
 │       ├── shell.h
 │       ├── timer.h
 │       ├── types.h
@@ -539,6 +568,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │   ├── memory.c
 │   ├── panic.c
 │   ├── pmm.c
+│   ├── scheduler.c
 │   ├── shell.c
 │   └── timer.c
 └── platform/
@@ -576,6 +606,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `include/nimera/panic.h` — the non-returning `panic()` API.
 - `include/nimera/pmm.h` — the minimal physical page manager API and 4 KiB
   page-size constant.
+- `include/nimera/scheduler.h` — the fixed kernel-thread and saved IRQ-frame
+  API used by the small preemptive scheduler.
 - `include/nimera/timer.h` — the platform-independent timer API.
 - `include/nimera/version.h` — the source-controlled `Nimera 0.0-dev` version.
 - `include/nimera/types.h` — the minimal freestanding `u64` type definition.
@@ -598,6 +630,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   a simple `wfe` loop.
 - `kernel/pmm.c` — bitmap physical page manager initialized from the memory
   map; it has no heap or virtual-memory responsibilities.
+- `kernel/scheduler.c` — the two-thread round-robin scheduler, synthetic worker
+  context, stack checks, and isolated scheduler test.
 - `kernel/timer.c` — validates timer frequency and exposes frequency, ticks,
   and monotonic milliseconds without architecture instructions.
 - `arch/aarch64/timer.c` — reads `CNTFRQ_EL0` and `CNTPCT_EL0` for the common
@@ -613,7 +647,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `platform/qemu-virt/gic.c` — minimal one-CPU GICv2 setup, acknowledge, and
   end-of-interrupt operations.
 - `kernel/irq.c` — common timer IRQ counter and dispatch path, separate from
-  GIC and PL011 details; it dispatches the timer and UART INTIDs explicitly.
+  GIC and PL011 details; it dispatches the timer and UART INTIDs explicitly,
+  and asks the scheduler for a replacement frame on timer interrupts.
 - `linker.ld` — defines `_start`, the fixed image address, ELF sections,
   `__kernel_start`/`__kernel_end`, page-aligned section boundaries, and a 16
   KiB private stack in `NOLOAD` `.bss`.
@@ -621,7 +656,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   LLD; provides `build`, `run`, `run-panic`, `run-timer`, `run-memory`,
   `run-pmm`, `run-heap`, `run-exception`, `run-mmu`, `run-mmu-fault`,
   `run-protection`, `run-protection-write`, `run-protection-exec`, `run-irq`,
-  `run-uart-irq`, `run-uart-overflow`, and `clean`.
+  `run-uart-irq`, `run-uart-overflow`, `run-sched`, and `clean`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -653,6 +688,8 @@ This is a freestanding program rather than a hosted application:
   dedicated Make targets enable their respective switch in isolated build
   directories. `NIMERA_UART_IRQ_TEST=0` and `NIMERA_UART_OVERFLOW_TEST=0`
   similarly keep UART-specific test paths out of the normal image.
+- `-DNIMERA_SCHED_TEST=0` keeps the normal shell path out of the isolated
+  scheduler test; `make run-sched` enables it in `build-sched/`.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.
