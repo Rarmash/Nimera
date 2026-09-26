@@ -21,7 +21,8 @@ The current milestone successfully:
 - enters `kernel_main()`;
 - routes kernel I/O through a minimal platform-independent console API;
 - writes `Hello from kernel` through QEMU `virt`'s PL011 UART; and
-- enables polling UART input and echoes each received character.
+- enables polling UART input and echoes each received character;
+- provides a minimal kernel panic path that reports a reason and halts safely.
 
 There is currently no libc, allocator, interrupt subsystem, scheduler,
 filesystem, userspace, or other larger OS subsystem.
@@ -58,6 +59,11 @@ The entry point is `_start` in `arch/aarch64/boot.S`:
 
 The input path is intentionally polling-based. It has no interrupts, ring
 buffer, line editor, shell, or command handling.
+
+The panic path is separate from the normal echo flow. `panic()` writes a fatal
+message and reason through the common console API, prints `System halted.`, and
+then remains in a CPU-local `wfe` loop. It does not use UART or PL011 symbols
+directly.
 
 The terminal output is:
 
@@ -114,6 +120,27 @@ make build
 make run
 ```
 
+The normal `make run` path does not trigger a panic. To exercise the panic
+runtime without editing source files, use:
+
+```sh
+make run-panic
+```
+
+This target builds an isolated panic-test image in `build-panic/` with
+`PANIC_TEST=1`, leaving the ordinary `build/` artifacts untouched. It should
+print:
+
+```text
+Nimera kernel panic
+Reason: panic test
+System halted.
+```
+
+The `noreturn` attribute on `panic()` tells Clang that the function cannot
+return to its caller. This matches the permanent halt loop and lets the
+compiler reason correctly about control flow.
+
 `make clean` removes generated objects, the ELF, and the link map:
 
 ```sh
@@ -133,13 +160,15 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 ├── .gitignore
 ├── include/
 │   └── nimera/
-│       └── console.h
+│       ├── console.h
+│       └── panic.h
 ├── arch/
 │   └── aarch64/
 │       └── boot.S
 ├── kernel/
 │   ├── console.c
-│   └── main.c
+│   ├── main.c
+│   └── panic.c
 └── platform/
     └── qemu-virt/
         └── uart.c
@@ -148,16 +177,19 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `arch/aarch64/boot.S` — the only assembly file; installs the initial stack,
   calls C, and provides the fallback loop if C returns.
 - `include/nimera/console.h` — the small platform-independent console API.
+- `include/nimera/panic.h` — the non-returning `panic()` API.
 - `kernel/console.c` — delegates the common console API to the current UART
   implementation.
 - `kernel/main.c` — defines `kernel_main()` and the minimal polling echo loop;
   it does not call UART functions directly.
+- `kernel/panic.c` — prints the panic report through Console API and halts in
+  a simple `wfe` loop.
 - `platform/qemu-virt/uart.c` — minimal PL011 MMIO input and output for QEMU
   `virt`.
 - `linker.ld` — defines `_start`, the fixed image address, ELF sections, and a
   16 KiB private stack in `NOLOAD` `.bss`.
-- `Makefile` — builds four object files and links them directly with LLD;
-  provides `build`, `run`, and `clean`.
+- `Makefile` — builds five object files and links them directly with LLD;
+  provides `build`, `run`, `run-panic`, and `clean`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -177,6 +209,10 @@ This is a freestanding program rather than a hosted application:
   linker script supplies the fixed guest address.
 - `-fno-asynchronous-unwind-tables -fno-unwind-tables` avoids unwind metadata
   that would require additional runtime support.
+- `-Iinclude` makes the project's freestanding headers available without
+  depending on host or libc headers.
+- `-DNIMERA_PANIC_TEST=0` keeps the normal build path free of the panic test;
+  `make run-panic` changes it to `1` for the separate runtime check.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.
@@ -187,6 +223,11 @@ This is a freestanding program rather than a hosted application:
 
 The link is performed directly by `ld.lld`, so no startup objects, libc,
 libgcc/compiler-rt, dynamic linker, or other third-party runtime is pulled in.
+
+## License
+
+Nimera is distributed under the Mozilla Public License 2.0 (MPL-2.0). See
+[`LICENSE`](LICENSE) for the complete license text.
 
 ## Project direction
 
@@ -201,7 +242,6 @@ Nimera aims to:
 
 The near-term roadmap is deliberately short:
 
-1. Panic handling
-2. Timer support
-3. Memory discovery and reporting
-4. Minimal interactive shell
+1. Timer support
+2. Memory discovery and reporting
+3. Minimal interactive shell

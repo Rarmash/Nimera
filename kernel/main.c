@@ -1,9 +1,14 @@
 // No libc, allocator, or runtime are needed for this milestone.
 
 #include <nimera/console.h>
+#include <nimera/panic.h>
 
 void kernel_main(void)
 {
+#if NIMERA_PANIC_TEST
+	panic("panic test");
+#endif
+
 	console_write("Hello from kernel\r\n");
 	console_write("Echo mode enabled. Type characters:\r\n");
 
