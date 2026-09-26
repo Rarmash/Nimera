@@ -21,7 +21,8 @@ enum vfs_error {
 	VFS_INVALID_PATH,
 	VFS_TOO_LARGE,
 	VFS_NOT_EMPTY,
-	VFS_BUSY
+	VFS_BUSY,
+	VFS_CROSS_DEVICE
 };
 
 struct vfs_node;
@@ -59,6 +60,15 @@ const char *vfs_mount_filesystem(void);
 const char *vfs_mount_device(void);
 struct vfs_node *vfs_root(void);
 enum vfs_error vfs_mount_root(struct vfs_node *root);
+enum vfs_error vfs_mount_at(struct vfs_node *mountpoint,
+				struct vfs_node *root, const char *filesystem,
+				const char *device);
+int vfs_node_is_mountpoint(const struct vfs_node *node);
+int vfs_same_mount(const struct vfs_node *left, const struct vfs_node *right);
+unsigned int vfs_mount_count(void);
+enum vfs_error vfs_mount_path(unsigned int index, char *buffer, u64 capacity);
+const char *vfs_mount_filesystem_at(unsigned int index);
+const char *vfs_mount_device_at(unsigned int index);
 enum vfs_error vfs_resolve(struct vfs_node *cwd, const char *path,
 			   struct vfs_node **result);
 enum vfs_error vfs_mkdir(struct vfs_node *cwd, const char *path,

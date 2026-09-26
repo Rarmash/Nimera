@@ -21,6 +21,102 @@
 
 #define NULL ((void *)0)
 
+#if NIMERA_NIMFS_BOOT
+static void nimfs_automount_secondary(void)
+{
+	struct vfs_node *volumes;
+	char mount_path[VFS_PATH_MAX];
+
+	if (vfs_resolve(vfs_root(), "/volumes", &volumes) != VFS_OK) {
+		panic("NimFS /volumes directory missing");
+	}
+	for (unsigned int index = 1U; index < block_count(); ++index) {
+		const struct block_device *device = block_get(index);
+		struct vfs_node *mountpoint;
+		int result;
+		unsigned int length = 0U;
+
+		if (device == NULL) continue;
+		mount_path[0] = '\0';
+		while (device->name[length] != '\0' && length + 1U < VFS_PATH_MAX)
+			++length;
+		if (length == 0U || length >= VFS_NAME_MAX) {
+			console_write("automount: invalid device name\r\n");
+			continue;
+		}
+		for (unsigned int character = 0U; character <= length; ++character)
+			mount_path[character] = device->name[character];
+		{
+			enum vfs_error mountpoint_result = vfs_mkdir(volumes, mount_path, &mountpoint);
+			if (mountpoint_result == VFS_ALREADY_EXISTS) {
+				mountpoint_result = vfs_resolve(volumes, mount_path, &mountpoint);
+				if (mountpoint_result == VFS_OK &&
+				    vfs_node_type(mountpoint) != VFS_NODE_DIRECTORY)
+					mountpoint_result = VFS_NOT_DIRECTORY;
+			}
+			if (mountpoint_result != VFS_OK) {
+			console_write("automount: cannot create mountpoint for ");
+			console_write(device->name); console_write(" (");
+			console_write(vfs_error_string(mountpoint_result)); console_write(")\r\n");
+			continue;
+			}
+		}
+		result = nimfs_mount_at((struct block_device *)device, mountpoint);
+		if (result == NIMFS_OK) {
+			console_write("automount: "); console_write(device->name);
+			console_write(" -> /volumes/"); console_write(device->name);
+			console_write("\r\n");
+			continue;
+		}
+		(void)vfs_rmdir(volumes, mount_path);
+		console_write("automount: "); console_write(device->name);
+		console_write(result == NIMFS_UNFORMATTED ?
+			": no supported filesystem\r\n" : ": corrupt NimFS\r\n");
+	}
+}
+
+#if NIMERA_NIMFS_MOUNT_TEST
+static void nimfs_mount_test(void)
+{
+	struct vfs_node *node;
+	char contents[32];
+	u64 size = 0ULL;
+
+	console_write("NimFS mount test\r\n");
+	if (vfs_resolve(vfs_root(), "/volumes/disk1", &node) != VFS_OK ||
+	    vfs_node_type(node) != VFS_NODE_DIRECTORY) {
+		panic("secondary NimFS was not mounted");
+	}
+	if (vfs_write(vfs_root(), "/volumes/disk1/mount-test", "mounted", 7ULL,
+			  &node) != VFS_OK ||
+	    vfs_resolve(vfs_root(), "/volumes/disk1/mount-test", &node) != VFS_OK ||
+	    vfs_read(node, contents, sizeof(contents), &size) != VFS_OK ||
+	    size != 7ULL) {
+		panic("secondary NimFS read/write failed");
+	}
+	contents[size] = '\0';
+	console_write("Secondary file: "); console_write(contents); console_write("\r\n");
+	if (vfs_resolve(vfs_root(), "/volumes/disk1/..", &node) != VFS_OK ||
+	    vfs_node_name(node)[0] != 'v') {
+		panic("mount parent traversal failed");
+	}
+	{
+		enum vfs_error error = vfs_rmdir(vfs_root(), "/volumes/disk1");
+		if (error != VFS_BUSY) {
+			console_write("mountpoint result: "); format_u64_decimal((u64)error);
+			console_write("\r\n"); panic("mountpoint protection failed");
+		}
+	}
+	if (vfs_rename(vfs_root(), "/users", "/volumes/disk1/users") !=
+	    VFS_CROSS_DEVICE) {
+		panic("cross-device rename was not rejected");
+	}
+	console_write("Parent traversal: OK\r\nMountpoint protection: OK\r\n");
+	console_write("Cross-device rename: rejected\r\nMount test complete.\r\n");
+}
+#endif
+#endif
+
 #if NIMERA_BLOCK_TEST
 static unsigned char block_test_buffer[512];
 
@@ -662,14 +758,24 @@ void kernel_main(void)
 #if NIMERA_NIMFS_FORMAT_TEST
 	{
 		const struct block_device *device = block_find("disk0");
+		const struct block_device *root_device = device;
 		int format_result;
 		int mount_result;
 		enum vfs_error tree_result;
 		console_write("NimFS format test\r\nDevice: disk0\r\nCapacity: ");
 		format_result = device == (const struct block_device *)0 ?
 			NIMFS_UNFORMATTED : nimfs_format((struct block_device *)device);
+		#if NIMERA_NIMFS_MULTI_FORMAT_TEST
+		if (format_result == NIMFS_OK) {
+			const struct block_device *secondary = block_find("disk1");
+			if (secondary == (const struct block_device *)0)
+				format_result = NIMFS_UNFORMATTED;
+			else if (nimfs_format((struct block_device *)secondary) != NIMFS_OK)
+				format_result = NIMFS_CORRUPT;
+		}
+		#endif
 		mount_result = format_result == NIMFS_OK ?
-			nimfs_mount((struct block_device *)device) : format_result;
+			nimfs_mount((struct block_device *)root_device) : format_result;
 		tree_result = mount_result == NIMFS_OK ? nimfs_create_initial_tree() : VFS_INVALID_PATH;
 		if (format_result != NIMFS_OK || mount_result != NIMFS_OK || tree_result != VFS_OK) {
 			console_write("format="); format_u64_decimal((u64)format_result);
@@ -690,7 +796,12 @@ void kernel_main(void)
 		if (result != NIMFS_OK) {
 			panic(nimfs_error_string(result));
 		}
+		nimfs_automount_secondary();
 	}
+#if NIMERA_NIMFS_MOUNT_TEST
+	nimfs_mount_test();
+	return;
+#endif
 #else
 	u64 heap_before_filesystem = heap_allocated_bytes();
 	vfs_init();

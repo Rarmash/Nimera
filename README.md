@@ -26,8 +26,9 @@ The current milestone successfully:
 - provides a minimal kernel panic path that reports a reason and halts safely;
 - reads the AArch64 Generic Timer to measure monotonic elapsed time; and
 - discovers the physical RAM region from QEMU's Device Tree Blob;
-- discovers QEMU `virtio,mmio` devices from the same Device Tree and exposes a
-  synchronous `disk0` block device when a `virtio-blk-device` is attached;
+- discovers QEMU `virtio,mmio` devices from the same Device Tree and exposes
+  synchronous `disk0`, `disk1`, ... block devices when `virtio-blk-device`
+  drives are attached;
 - reads and writes 512-byte sectors through a small modern VirtIO split queue,
   with a persistent marker test on a reserved last sector;
 - separates physical RAM from clipped/merged reserved ranges, computes usable
@@ -58,10 +59,10 @@ The current milestone successfully:
 - provides NimEdit 0.1, a small built-in kernel text editor with VFS-backed
   load/save, ASCII editing, cursor movement, vertical scrolling, dirty-state
   tracking, and Ctrl-S/Ctrl-Q controls.
-- provides NimFS v0, a versioned native persistent filesystem over the whole
-  `disk0` VirtIO block device. Regular files, directories, overwrite, append,
-  rename, unlink, and empty-directory removal are exposed through the same VFS
-  used by RAMFS.
+- provides NimFS v0, a versioned native persistent filesystem over a whole
+  VirtIO block device. Regular files, directories, overwrite, append, rename,
+  unlink, and empty-directory removal use the same VFS as RAMFS; an additional
+  NimFS volume can be mounted below `/volumes`.
 
 There is currently no libc, userspace,
 processes, UART TX interrupt path, or other larger OS subsystem. The current
@@ -136,6 +137,13 @@ The shell is started directly by the kernel. It is not a user process and does
 not depend on a filesystem, current working directory, userspace, or external
 programs.
 
+In NimFS boot mode, `disk0` is mounted as `/` first. Additional discovered
+block devices are probed without formatting them. A valid secondary NimFS is
+mounted at `/volumes/<device-name>` (currently the deterministic fallback name,
+such as `disk1`); an unformatted or corrupt device is reported and skipped.
+VFS lookup follows this mount boundary transparently. Removing a mountpoint or
+renaming across filesystem boundaries is rejected.
+
 The input path is interrupt-driven at the UART receive boundary. The UART IRQ
 handler drains the PL011 FIFO into the fixed ring and wakes a shell thread that
 is in `WAITING` state. The scheduler does not switch directly from the UART
@@ -190,8 +198,8 @@ The RAMFS is ephemeral, so saved files disappear when QEMU stops.
 
 ## NimFS v0
 
-NimFS is Nimera's first native persistent filesystem. It uses the entire
-`disk0` image as one volume; there are no partitions. The format is explicitly
+NimFS is Nimera's first native persistent filesystem. Each image uses its
+entire block device as one volume; there are no partitions. The format is explicitly
 versioned as format version 1 and uses little-endian field serialization rather
 than relying on host C struct padding.
 
@@ -208,11 +216,13 @@ Each inode has 60 direct data-block references, so the current maximum regular
 file size is 30 KiB. Directory entries are fixed 64-byte records with a
 bounded 58-byte on-disk component name. The bitmap and inode table are cached
 in RAM for the running kernel, but every allocation and inode change is written
-back through the block API to `disk0`; they are not a RAM mirror used as the
+back through the block API to the owning disk; they are not a RAM mirror used as the
 authoritative store.
 
-The development image is `build-storage/nimfs.img`. Formatting is always
-explicit and destructive:
+The original single-volume development image is `build-storage/nimfs.img`.
+The multi-volume targets use `build-storage/nimfs-root.img` and
+`build-storage/nimfs-data.img`, each 64 MiB. Formatting is always explicit and
+destructive:
 
 ```sh
 make nimfs-disk-reset
@@ -224,8 +234,13 @@ make run-nimfs
 the initial `/system`, `/apps`, `/users`, `/volumes`, `/devices`, `/config`,
 `/var`, and `/tmp` tree. `run-nimfs` only mounts an existing valid image; it
 does not reformat it. The NimFS shell also provides `mounts` and `fsinfo`.
-`/tmp`, `/devices`, and `/volumes` are ordinary NimFS directories for now;
-tmpfs, devfs, and automounting are future work.
+For the multi-volume development path use `make nimfs-root-create`,
+`make nimfs-data-create`, `make run-nimfs-multi-format`, then
+`make run-nimfs-multi`. `make run-mounts` resets both images, formats them in
+an isolated test build, and checks transparent traversal, mountpoint
+protection, and cross-filesystem rename rejection. `/tmp`, `/devices`, and
+`/volumes` are ordinary NimFS directories for now; tmpfs, devfs, labels, and
+automount policies beyond this boot-time development probe are future work.
 
 NimFS v0 has no journal or crash recovery. A power loss or QEMU termination
 during metadata writes may corrupt the image. It also does not implement
@@ -352,8 +367,9 @@ replaces exact bytes and `append` adds exact bytes without an implicit newline.
 `rm` removes regular files; `rmdir` only removes empty directories; and `mv`
 requires a new, non-existing destination and rejects directory cycles. There
 are no permissions, ownership, timestamps, or recursive removal yet.
-`/volumes` is an ordinary directory reserved for future automounts, and
-`/devices` is an ordinary directory, not yet a devfs.
+In normal RAMFS mode `/volumes` remains an ordinary directory. In NimFS boot
+mode it is the location for the current boot-time secondary-volume probe;
+`/devices` remains an ordinary directory, not yet a devfs.
 
 The isolated test is:
 
@@ -863,9 +879,9 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `kernel/scheduler.c` — the two-thread round-robin scheduler, synthetic worker
   context, `WAITING`/wakeup transitions, stack checks, and isolated scheduler
   tests.
-- `kernel/vfs.c` — the root mount, shared parent/basename path helper, VFS
-  dispatch, mutation policy, boot-created directories, and `/system/version`
-  creation.
+- `kernel/vfs.c` — root and secondary mount records, mount-aware path
+  traversal, shared parent/basename path helper, VFS dispatch, mutation
+  policy, boot-created directories, and `/system/version` creation.
 - `kernel/ramfs.c` — the heap-backed in-memory directory/file nodes, geometric
   file-buffer growth, child unlinking, renaming, and minimal VFS operations.
 - `include/nimera/editor.h` — the small shell-to-editor entry-point API.
@@ -882,7 +898,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   wakes the blocked console consumer. It also exposes nonblocking access to
   already-buffered bytes for terminal sequence lookahead.
 - `platform/qemu-virt/virtio.c` — bounded DTB discovery and the synchronous
-  modern VirtIO block backend; it is not a filesystem driver.
+  multi-device modern VirtIO block backend; it is not a filesystem driver.
 - `platform/qemu-virt/irq.c` — minimal DTB discovery of the GICv2 MMIO ranges
   and the architected timer PPI.
 - `platform/qemu-virt/gic.c` — minimal one-CPU GICv2 setup, acknowledge, and

@@ -91,9 +91,12 @@ struct avail { u16 flags,index,rings[8]; } __attribute__((packed));
 struct used_elem { u32 id,len; } __attribute__((packed));
 struct used { u16 flags,index; struct used_elem ring[8]; } __attribute__((packed));
 struct request { u32 type; u32 reserved; u64 sector; } __attribute__((packed));
+#define MAX_VIRTIO_BLOCKS 8U
 struct virtio_state { volatile u8 *base; u16 qsize; u64 desc,avail,used,request,data; u16 last_used, avail_index; };
-static struct virtio_state state;
-static struct block_device disk;
+static struct virtio_state states[MAX_VIRTIO_BLOCKS];
+static struct block_device disks[MAX_VIRTIO_BLOCKS];
+static char disk_names[MAX_VIRTIO_BLOCKS][6];
+static unsigned int disk_count;
 
 static u32 rd32(volatile u8 *b,u32 o){return *(volatile u32 *)(b+o);}
 static void wr32(volatile u8 *b,u32 o,u32 v){*(volatile u32 *)(b+o)=v;}
@@ -101,28 +104,28 @@ static u64 rd64(volatile u8 *b,u32 o){return (u64)rd32(b,o)|(u64)rd32(b,o+4)<<32
 /* The device reads the queue after the notify write; DSB makes prior RAM stores visible first. */
 static void barrier(void){__asm__ volatile("dsb sy" ::: "memory");}
 static void clear_page(u64 p){u8 *x=(u8 *)(unsigned long)p;for(u64 i=0;i<NIMERA_PAGE_SIZE;++i)x[i]=0;}
-static void set_status(u32 v){wr32(state.base,V_STATUS,v);}
-static u32 status(void){return rd32(state.base,V_STATUS);}
+static void set_status(struct virtio_state *state,u32 v){wr32(state->base,V_STATUS,v);}
+static u32 status(struct virtio_state *state){return rd32(state->base,V_STATUS);}
 static enum block_result io(struct block_device *d,u64 block,void *buffer,int write)
 {
-	struct request *r=(struct request *)(unsigned long)state.request; struct desc *q=(struct desc *)(unsigned long)state.desc; struct avail *a=(struct avail *)(unsigned long)state.avail; volatile struct used *u=(volatile struct used *)(unsigned long)state.used;
-	(void)d; if (block>=disk.block_count) return BLOCK_INVALID;
-	r->type=write?1U:0U; r->reserved=0; r->sector=block; for(u64 i=0;i<512;++i)((u8 *)(unsigned long)state.data)[i]=write?((const u8 *)buffer)[i]:0;
-	q[0]=(struct desc){state.request,16U,DESC_NEXT,1}; q[1]=(struct desc){state.data,512U,(u16)(write?0:DESC_WRITE)|DESC_NEXT,2}; q[2]=(struct desc){state.request+16U,1U,write?DESC_WRITE:DESC_WRITE,0};
-	a->rings[state.avail_index % state.qsize]=0; barrier(); ++state.avail_index; a->index=state.avail_index; barrier(); wr32(state.base,V_NOTIFY,0); barrier();
-	for (u64 spins=0ULL; u->index==state.last_used; ++spins) {
-		if ((rd32(state.base,V_STATUS)&0x80U)!=0) return BLOCK_IO_ERROR;
+	struct virtio_state *state=(struct virtio_state *)d->private_data; struct request *r=(struct request *)(unsigned long)state->request; struct desc *q=(struct desc *)(unsigned long)state->desc; struct avail *a=(struct avail *)(unsigned long)state->avail; volatile struct used *u=(volatile struct used *)(unsigned long)state->used;
+	if (block>=d->block_count) return BLOCK_INVALID;
+	r->type=write?1U:0U; r->reserved=0; r->sector=block; for(u64 i=0;i<512;++i)((u8 *)(unsigned long)state->data)[i]=write?((const u8 *)buffer)[i]:0;
+	q[0]=(struct desc){state->request,16U,DESC_NEXT,1}; q[1]=(struct desc){state->data,512U,(u16)(write?0:DESC_WRITE)|DESC_NEXT,2}; q[2]=(struct desc){state->request+16U,1U,write?DESC_WRITE:DESC_WRITE,0};
+	a->rings[state->avail_index % state->qsize]=0; barrier(); ++state->avail_index; a->index=state->avail_index; barrier(); wr32(state->base,V_NOTIFY,0); barrier();
+	for (u64 spins=0ULL; u->index==state->last_used; ++spins) {
+		if ((rd32(state->base,V_STATUS)&0x80U)!=0) return BLOCK_IO_ERROR;
 		if (spins == 100000000ULL) {
 #if NIMERA_BLOCK_TEST
-			console_write("VirtIO completion timeout, status "); format_u64_hex(rd32(state.base,V_STATUS)); console_write(" used "); format_u64_decimal(u->index); console_write("\r\n");
+			console_write("VirtIO completion timeout, status "); format_u64_hex(rd32(state->base,V_STATUS)); console_write(" used "); format_u64_decimal(u->index); console_write("\r\n");
 #endif
 			return BLOCK_IO_ERROR;
 		}
 	}
-	barrier(); state.last_used=u->index; if(!write) for(u64 i=0;i<512;++i)((u8 *)buffer)[i]=((u8 *)(unsigned long)state.data)[i];
-	if (*((volatile u8 *)(unsigned long)(state.request+16U)) != 0U) {
+	barrier(); state->last_used=u->index; if(!write) for(u64 i=0;i<512;++i)((u8 *)buffer)[i]=((u8 *)(unsigned long)state->data)[i];
+	if (*((volatile u8 *)(unsigned long)(state->request+16U)) != 0U) {
 #if NIMERA_BLOCK_TEST
-		console_write("VirtIO request status: "); format_u64_decimal(*((volatile u8 *)(unsigned long)(state.request+16U))); console_write(" used length: "); format_u64_decimal(u->ring[0].len); console_write("\r\n");
+		console_write("VirtIO request status: "); format_u64_decimal(*((volatile u8 *)(unsigned long)(state->request+16U))); console_write(" used length: "); format_u64_decimal(u->ring[0].len); console_write("\r\n");
 #endif
 		return BLOCK_IO_ERROR;
 	}
@@ -133,26 +136,27 @@ static enum block_result write_block(struct block_device*d,u64 b,const void*x){r
 
 int virtio_block_init(void)
 {
-	struct virtio_mmio_info info[32]; unsigned int count=virtio_mmio_discover(info,32);
+	struct virtio_mmio_info info[32]; unsigned int count=virtio_mmio_discover(info,32); disk_count=0U;
 	for(unsigned int i=0;i<count;++i){
 		if(mmu_map_device_range(info[i].base,info[i].size)!=0) panic("VirtIO MMIO mapping failed");
 	}
-	for(unsigned int i=0;i<count;++i){ volatile u8 *b=(volatile u8 *)(unsigned long)info[i].base;
+	for(unsigned int i=0;i<count && disk_count<MAX_VIRTIO_BLOCKS;++i){ volatile u8 *b=(volatile u8 *)(unsigned long)info[i].base; struct virtio_state *state=&states[disk_count];
 #if NIMERA_BLOCK_TEST
 		if (rd32(b,V_DEVICE_ID) != 0U) { console_write("VirtIO candidate "); format_u64_hex(info[i].base); console_write(" id "); format_u64_decimal(rd32(b,V_DEVICE_ID)); console_write("\r\n"); }
 #endif
 		if(rd32(b,V_MAGIC)!=0x74726976U||rd32(b,V_VERSION)!=2U||rd32(b,V_DEVICE_ID)!=2U) continue;
-		state.base=b; set_status(0); set_status(STATUS_ACK); set_status(STATUS_ACK|STATUS_DRIVER);
-		wr32(b,V_DF_SEL,0); u64 features=rd32(b,V_DF); wr32(b,V_DF_SEL,1); features|=(u64)rd32(b,V_DF)<<32; if((features&F_VERSION_1)==0) {set_status(0x80); continue;} wr32(b,V_GF_SEL,0); wr32(b,V_GF,0); wr32(b,V_GF_SEL,1); wr32(b,V_GF,(u32)(F_VERSION_1>>32)); set_status(STATUS_ACK|STATUS_DRIVER|STATUS_FEATURES_OK); if((status()&STATUS_FEATURES_OK)==0){set_status(0x80);continue;}
-		wr32(b,V_QSEL,0); u32 max=rd32(b,V_QMAX); state.qsize=(u16)(max<8?max:8); if(state.qsize==0){set_status(0x80);continue;}
-		if(pmm_alloc_page(&state.desc)||pmm_alloc_page(&state.avail)||pmm_alloc_page(&state.used)||pmm_alloc_page(&state.request)||pmm_alloc_page(&state.data)) panic("VirtIO queue allocation failed"); clear_page(state.desc);clear_page(state.avail);clear_page(state.used);clear_page(state.request);clear_page(state.data); state.last_used=0; state.avail_index=0;
-		wr32(b,V_QNUM,state.qsize); wr32(b,V_QDESC,(u32)state.desc);wr32(b,V_QDESC+4,(u32)(state.desc>>32));wr32(b,V_QDRIVER,(u32)state.avail);wr32(b,V_QDRIVER+4,(u32)(state.avail>>32));wr32(b,V_QDEVICE,(u32)state.used);wr32(b,V_QDEVICE+4,(u32)(state.used>>32));wr32(b,V_QREADY,1); set_status(STATUS_ACK|STATUS_DRIVER|STATUS_FEATURES_OK|STATUS_DRIVER_OK);
-		disk=(struct block_device){"disk0",512ULL,rd64(b,V_CONFIG),&state,read_block,write_block};
+		state->base=b; set_status(state,0); set_status(state,STATUS_ACK); set_status(state,STATUS_ACK|STATUS_DRIVER);
+		wr32(b,V_DF_SEL,0); u64 features=rd32(b,V_DF); wr32(b,V_DF_SEL,1); features|=(u64)rd32(b,V_DF)<<32; if((features&F_VERSION_1)==0) {set_status(state,0x80); continue;} wr32(b,V_GF_SEL,0); wr32(b,V_GF,0); wr32(b,V_GF_SEL,1); wr32(b,V_GF,(u32)(F_VERSION_1>>32)); set_status(state,STATUS_ACK|STATUS_DRIVER|STATUS_FEATURES_OK); if((status(state)&STATUS_FEATURES_OK)==0){set_status(state,0x80);continue;}
+		wr32(b,V_QSEL,0); u32 max=rd32(b,V_QMAX); state->qsize=(u16)(max<8?max:8); if(state->qsize==0){set_status(state,0x80);continue;}
+		if(pmm_alloc_page(&state->desc)||pmm_alloc_page(&state->avail)||pmm_alloc_page(&state->used)||pmm_alloc_page(&state->request)||pmm_alloc_page(&state->data)) panic("VirtIO queue allocation failed"); clear_page(state->desc);clear_page(state->avail);clear_page(state->used);clear_page(state->request);clear_page(state->data); state->last_used=0; state->avail_index=0;
+		wr32(b,V_QNUM,state->qsize); wr32(b,V_QDESC,(u32)state->desc);wr32(b,V_QDESC+4,(u32)(state->desc>>32));wr32(b,V_QDRIVER,(u32)state->avail);wr32(b,V_QDRIVER+4,(u32)(state->avail>>32));wr32(b,V_QDEVICE,(u32)state->used);wr32(b,V_QDEVICE+4,(u32)(state->used>>32));wr32(b,V_QREADY,1); set_status(state,STATUS_ACK|STATUS_DRIVER|STATUS_FEATURES_OK|STATUS_DRIVER_OK);
+		disks[disk_count]=(struct block_device){disk_names[disk_count],512ULL,rd64(b,V_CONFIG),state,read_block,write_block};
+		disk_names[disk_count][0]='d'; disk_names[disk_count][1]='i'; disk_names[disk_count][2]='s'; disk_names[disk_count][3]='k'; disk_names[disk_count][4]=(char)('0'+disk_count); disk_names[disk_count][5]='\0';
 #if NIMERA_BLOCK_TEST
 		console_write("VirtIO magic: "); format_u64_hex(rd32(b,V_MAGIC)); console_write(" version: "); format_u64_decimal(rd32(b,V_VERSION)); console_write(" device: "); format_u64_decimal(rd32(b,V_DEVICE_ID)); console_write(" vendor: "); format_u64_hex(rd32(b,V_VENDOR_ID)); console_write("\r\n");
-		console_write("Features: VERSION_1\r\nQueue size: "); format_u64_decimal(state.qsize); console_write(" status: "); format_u64_hex(status()); console_write("\r\n");
-		console_write("Desc: "); format_u64_hex(state.desc); console_write(" Avail: "); format_u64_hex(state.avail); console_write(" Used: "); format_u64_hex(state.used); console_write("\r\n");
+		console_write("Features: VERSION_1\r\nQueue size: "); format_u64_decimal(state->qsize); console_write(" status: "); format_u64_hex(status(state)); console_write("\r\n");
+		console_write("Desc: "); format_u64_hex(state->desc); console_write(" Avail: "); format_u64_hex(state->avail); console_write(" Used: "); format_u64_hex(state->used); console_write("\r\n");
 #endif
-		if(block_register(&disk)!=BLOCK_OK) panic("VirtIO block registration failed"); return 0; }
-	return -1;
+		if(block_register(&disks[disk_count])!=BLOCK_OK) panic("VirtIO block registration failed"); ++disk_count; }
+	return disk_count == 0U ? -1 : 0;
 }

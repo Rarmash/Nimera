@@ -25,4 +25,7 @@ build-block/
 build-storage/
 build-nimfs/
 build-nimfs-format/
+build-nimfs-multi-format/
+build-nimfs-multi/
+build-mounts/
 build-run/

@@ -1,7 +1,7 @@
 #include <nimera/block.h>
 #include <nimera/panic.h>
 
-#define NIMERA_MAX_BLOCK_DEVICES 4U
+#define NIMERA_MAX_BLOCK_DEVICES 8U
 
 static struct block_device *devices[NIMERA_MAX_BLOCK_DEVICES];
 static unsigned int device_count;

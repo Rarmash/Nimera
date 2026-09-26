@@ -30,6 +30,7 @@ struct nimfs_node {
   struct vfs_node vfs;
   char name[VFS_NAME_MAX + 1U];
   u32 inode;
+  struct nimfs_state *context;
 };
 
 struct nimfs_state {
@@ -45,12 +46,17 @@ struct nimfs_state {
   struct nimfs_inode *inodes;
 };
 
-static struct nimfs_state fs;
+#define NIMFS_MAX_CONTEXTS 4U
+static struct nimfs_state context_storage[NIMFS_MAX_CONTEXTS];
+static struct nimfs_state *active_context = &context_storage[0];
+#define fs (*active_context)
+static unsigned int context_count;
 static unsigned char io_buffer[NIMFS_BLOCK_SIZE];
-static unsigned char bitmap_cache[NIMFS_MAX_BITMAP_BLOCKS * NIMFS_BLOCK_SIZE];
-static struct nimfs_inode inode_cache[NIMFS_INODES];
+static unsigned char bitmap_cache[NIMFS_MAX_CONTEXTS][NIMFS_MAX_BITMAP_BLOCKS * NIMFS_BLOCK_SIZE];
+static struct nimfs_inode inode_cache[NIMFS_MAX_CONTEXTS][NIMFS_INODES];
 static unsigned char append_buffer[NIMFS_FILE_MAX];
 static const struct vfs_operations ops;
+static unsigned int active_context_index(void);
 static u32 le32(const unsigned char *p) {
   return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24);
 }
@@ -120,7 +126,7 @@ static int save_inode(u32 number) {
 }
 
 static int load_inode_table(void) {
-  fs.inodes = inode_cache;
+  fs.inodes = inode_cache[active_context_index()];
   for (u32 sector = 0; sector < fs.inode_blocks; ++sector) {
     if (disk_read(fs.inode_start + sector, io_buffer) != 0)
       return -1;
@@ -200,6 +206,7 @@ static enum vfs_error make_node(struct nimfs_node *parent, const char *name,
   for (unsigned int i = 0; i <= n; ++i)
     node->name[i] = name[i];
   node->inode = inode;
+  node->context = active_context;
   node->vfs.name = node->name;
   node->vfs.type = fs.inodes[inode].type == INODE_DIRECTORY ? VFS_NODE_DIRECTORY
                                                             : VFS_NODE_FILE;
@@ -231,7 +238,16 @@ static const struct vfs_operations ops = {
     nf_write,  nf_append,  nf_remove, nf_rename, nf_move};
 
 static struct vfs_node *root;
-static struct nimfs_node root_node;
+static struct nimfs_node root_nodes[NIMFS_MAX_CONTEXTS];
+static unsigned int active_context_index(void) {
+  return (unsigned int)(active_context - context_storage);
+}
+static struct nimfs_state *select_context(struct block_device *device) {
+  for (unsigned int i = 0U; i < context_count; ++i)
+    if (context_storage[i].device == device) return &context_storage[i];
+  if (context_count == NIMFS_MAX_CONTEXTS) return (struct nimfs_state *)0;
+  return &context_storage[context_count++];
+}
 static int dir_slot(struct nimfs_inode *dir, const char *name, u32 *block,
                     unsigned int *slot) {
   char current[VFS_NAME_MAX + 1U];
@@ -296,6 +312,7 @@ static int remove_entry(u32 dirno, const char *name) {
 
 static enum vfs_error nf_lookup(struct vfs_node *d, const char *name,
                                 struct vfs_node **result) {
+  active_context = node_of(d)->context;
   struct nimfs_node *dir = node_of(d);
   u32 b;
   unsigned int s;
@@ -312,6 +329,7 @@ static enum vfs_error nf_lookup(struct vfs_node *d, const char *name,
 }
 static enum vfs_error nf_readdir(struct vfs_node *d, unsigned int index,
                                  struct vfs_node **result) {
+  active_context = node_of(d)->context;
   struct nimfs_node *dir = node_of(d);
   char name[VFS_NAME_MAX + 1U];
   if (d->type != VFS_NODE_DIRECTORY)
@@ -333,6 +351,7 @@ static enum vfs_error nf_readdir(struct vfs_node *d, unsigned int index,
 }
 static enum vfs_error nf_mkdir(struct vfs_node *d, const char *name,
                                struct vfs_node **result) {
+  active_context = node_of(d)->context;
   u32 ino, block, old_block;
   unsigned int old_slot;
   struct nimfs_node *dir = node_of(d);
@@ -383,6 +402,7 @@ static int replace_data(u32 ino, const char *data, u64 size) {
 static enum vfs_error nf_create(struct vfs_node *d, const char *name,
                                 const char *data, u64 size,
                                 struct vfs_node **result) {
+  active_context = node_of(d)->context;
   u32 ino, b;
   unsigned int slot;
   struct nimfs_node *dir = node_of(d);
@@ -408,6 +428,7 @@ static enum vfs_error nf_create(struct vfs_node *d, const char *name,
 }
 static enum vfs_error nf_read(struct vfs_node *f, char *out, u64 cap,
                               u64 *size) {
+  active_context = node_of(f)->context;
   struct nimfs_inode *in = &fs.inodes[node_of(f)->inode];
   if (f->type == VFS_NODE_DIRECTORY)
     return VFS_IS_DIRECTORY;
@@ -424,11 +445,13 @@ static enum vfs_error nf_read(struct vfs_node *f, char *out, u64 cap,
   return VFS_OK;
 }
 static enum vfs_error nf_write(struct vfs_node *f, const char *d, u64 n) {
+  active_context = node_of(f)->context;
   if (f->type == VFS_NODE_DIRECTORY)
     return VFS_IS_DIRECTORY;
   return replace_data(node_of(f)->inode, d, n) == 0 ? VFS_OK : VFS_TOO_LARGE;
 }
 static enum vfs_error nf_append(struct vfs_node *f, const char *d, u64 n) {
+  active_context = node_of(f)->context;
   struct nimfs_inode *in = &fs.inodes[node_of(f)->inode];
   u64 size = in->size;
   if (f->type == VFS_NODE_DIRECTORY)
@@ -442,6 +465,7 @@ static enum vfs_error nf_append(struct vfs_node *f, const char *d, u64 n) {
   return nf_write(f, (const char *)append_buffer, size + n);
 }
 static enum vfs_error nf_remove(struct vfs_node *f) {
+  active_context = node_of(f)->context;
   struct nimfs_node *n = node_of(f);
   if (f->type == VFS_NODE_DIRECTORY) {
     for (unsigned int i = 0; i < NIMFS_DIRECT; ++i)
@@ -457,6 +481,7 @@ static enum vfs_error nf_remove(struct vfs_node *f) {
   return save_inode(n->inode) == 0 ? VFS_OK : VFS_NOT_FOUND;
 }
 static enum vfs_error nf_rename(struct vfs_node *f, const char *name) {
+  active_context = node_of(f)->context;
   struct nimfs_node *n = node_of(f);
   u32 b, old_b;
   unsigned int s, old_s;
@@ -477,7 +502,10 @@ static enum vfs_error nf_rename(struct vfs_node *f, const char *name) {
   return disk_write(old_b, io_buffer) == 0 ? VFS_OK : VFS_NOT_FOUND;
 }
 static enum vfs_error nf_move(struct vfs_node *f, struct vfs_node *d) {
+  active_context = node_of(f)->context;
   struct nimfs_node *n = node_of(f);
+  if (node_of(d)->context != active_context)
+    return VFS_CROSS_DEVICE;
   u32 ino = n->inode;
   if (remove_entry(node_of(f->parent)->inode, n->name) != 0 ||
       add_entry(node_of(d)->inode, ino, n->name) != 0)
@@ -516,16 +544,19 @@ static int validate_superblock(void) {
   return NIMFS_OK;
 }
 
-int nimfs_mount(struct block_device *device) {
+static int nimfs_mount_internal(struct block_device *device,
+                                struct vfs_node *mountpoint) {
   if (device == 0 || device->block_size != NIMFS_BLOCK_SIZE)
     return NIMFS_CORRUPT;
+  active_context = select_context(device);
+  if (active_context == (struct nimfs_state *)0) return NIMFS_NO_SPACE;
   fs.device = device;
   if (disk_read(0, io_buffer) != 0)
     return NIMFS_IO;
   int result = validate_superblock();
   if (result != NIMFS_OK)
     return result;
-  fs.bitmap = bitmap_cache;
+  fs.bitmap = bitmap_cache[active_context_index()];
   if (load_inode_table() != 0)
     return NIMFS_CORRUPT;
   for (u32 i = 0; i < fs.bitmap_blocks; ++i)
@@ -535,24 +566,35 @@ int nimfs_mount(struct block_device *device) {
   if (!valid_inode(fs.root_inode) ||
       fs.inodes[fs.root_inode].type != INODE_DIRECTORY)
     return NIMFS_CORRUPT;
-  zero(&root_node, sizeof(root_node));
-  root_node.inode = fs.root_inode;
-  root_node.name[0] = '/';
-  root_node.vfs.name = root_node.name;
-  root_node.vfs.type = VFS_NODE_DIRECTORY;
-  root_node.vfs.private_data = &root_node;
-  root_node.vfs.operations = &ops;
-  root = &root_node.vfs;
-  if (vfs_mount_root(root) != VFS_OK)
+  struct nimfs_node *root_node = &root_nodes[active_context_index()];
+  zero(root_node, sizeof(*root_node));
+  root_node->inode = fs.root_inode;
+  root_node->context = active_context;
+  root_node->name[0] = '/';
+  root_node->vfs.name = root_node->name;
+  root_node->vfs.type = VFS_NODE_DIRECTORY;
+  root_node->vfs.private_data = root_node;
+  root_node->vfs.operations = &ops;
+  root = &root_node->vfs;
+  if ((mountpoint == (struct vfs_node *)0 ? vfs_mount_root(root) :
+       vfs_mount_at(mountpoint, root, "NimFS", device->name)) != VFS_OK)
     return NIMFS_CORRUPT;
-  vfs_set_mount_info("NimFS", "disk0");
+  if (mountpoint == (struct vfs_node *)0) vfs_set_mount_info("NimFS", device->name);
   return NIMFS_OK;
+}
+
+int nimfs_mount(struct block_device *device) { return nimfs_mount_internal(device, (struct vfs_node *)0); }
+
+int nimfs_mount_at(struct block_device *device, struct vfs_node *mountpoint) {
+  return nimfs_mount_internal(device, mountpoint);
 }
 
 int nimfs_format(struct block_device *device) {
   if (device == 0 || device->block_size != NIMFS_BLOCK_SIZE ||
       device->block_count < 1024ULL)
     return NIMFS_CORRUPT;
+  active_context = select_context(device);
+  if (active_context == (struct nimfs_state *)0) return NIMFS_NO_SPACE;
   fs.device = device;
   fs.total_blocks = device->block_count;
   fs.bitmap_start = 1U;
@@ -563,8 +605,8 @@ int nimfs_format(struct block_device *device) {
   fs.inode_blocks = 128U;
   fs.data_start = fs.inode_start + fs.inode_blocks;
   fs.root_inode = 1U;
-  fs.bitmap = bitmap_cache;
-  fs.inodes = inode_cache;
+  fs.bitmap = bitmap_cache[active_context_index()];
+  fs.inodes = inode_cache[active_context_index()];
   zero(fs.bitmap, (u64)fs.bitmap_blocks * 512ULL);
   zero(fs.inodes, (u64)NIMFS_INODES * sizeof(struct nimfs_inode));
   for (u32 b = 0; b < fs.data_start; ++b)

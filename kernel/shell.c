@@ -92,13 +92,17 @@ static void shell_disks(void)
 
 static void shell_mounts(void)
 {
-	console_write("/  ");
-	console_write(vfs_mount_filesystem() == (const char *)0 ? "unknown" : vfs_mount_filesystem());
-	if (vfs_mount_device() != (const char *)0) {
-		console_write("  ");
-		console_write(vfs_mount_device());
+	char path[VFS_PATH_MAX];
+	for (unsigned int index = 0U; index < vfs_mount_count(); ++index) {
+		if (vfs_mount_path(index, path, sizeof(path)) != VFS_OK) continue;
+		console_write(path); console_write("  ");
+		console_write(vfs_mount_filesystem_at(index) == (const char *)0 ?
+			"unknown" : vfs_mount_filesystem_at(index));
+		if (vfs_mount_device_at(index) != (const char *)0) {
+			console_write("  "); console_write(vfs_mount_device_at(index));
+		}
+		console_write("\r\n");
 	}
-	console_write("\r\n");
 }
 
 static void shell_fsinfo(void)

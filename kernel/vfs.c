@@ -6,6 +6,18 @@
 static struct vfs_node *root_node;
 static const char *mount_filesystem;
 static const char *mount_device;
+#define VFS_MAX_MOUNTS 8U
+struct vfs_mount_record {
+	struct vfs_node *mountpoint;
+	struct vfs_node *root;
+	char path[VFS_PATH_MAX];
+	const char *filesystem;
+	const char *device;
+};
+static struct vfs_mount_record mounts[VFS_MAX_MOUNTS];
+static unsigned int mount_count;
+enum vfs_error vfs_format_path(const struct vfs_node *node, char *buffer,
+			       u64 capacity);
 
 static unsigned int vfs_string_length(const char *text)
 {
@@ -54,6 +66,7 @@ void vfs_init(void)
 	struct vfs_node *node;
 	mount_filesystem = "RAMFS";
 	mount_device = (const char *)0;
+	mount_count = 0U;
 	static const char *directories[] = {
 		"system", "apps", "users", "volumes", "devices", "config",
 		"var", "tmp"
@@ -79,6 +92,10 @@ void vfs_set_mount_info(const char *filesystem, const char *device)
 {
 	mount_filesystem = filesystem;
 	mount_device = device;
+	if (mount_count != 0U) {
+		mounts[0].filesystem = filesystem;
+		mounts[0].device = device;
+	}
 }
 
 const char *vfs_mount_filesystem(void) { return mount_filesystem; }
@@ -96,7 +113,108 @@ enum vfs_error vfs_mount_root(struct vfs_node *root)
 	}
 	root_node = root;
 	root->parent = (struct vfs_node *)0;
+	mount_count = 1U;
+	mounts[0] = (struct vfs_mount_record){(struct vfs_node *)0, root, "/",
+		"RAMFS", (const char *)0};
 	return VFS_OK;
+}
+
+enum vfs_error vfs_mount_at(struct vfs_node *mountpoint,
+		struct vfs_node *root, const char *filesystem, const char *device)
+{
+	if (mountpoint == (struct vfs_node *)0 || root == (struct vfs_node *)0 ||
+		mountpoint->type != VFS_NODE_DIRECTORY || root->type != VFS_NODE_DIRECTORY ||
+		mount_count == VFS_MAX_MOUNTS) {
+		return VFS_INVALID_PATH;
+	}
+	root->parent = mountpoint;
+	if (vfs_format_path(mountpoint, mounts[mount_count].path,
+				 VFS_PATH_MAX - 1U) != VFS_OK) {
+		return VFS_TOO_LARGE;
+	}
+	mounts[mount_count].mountpoint = mountpoint;
+	mounts[mount_count].root = root;
+	mounts[mount_count].filesystem = filesystem;
+	mounts[mount_count].device = device;
+	++mount_count;
+	return VFS_OK;
+}
+
+static struct vfs_node *vfs_follow_mount(struct vfs_node *node)
+{
+	char path[VFS_PATH_MAX];
+	if (vfs_format_path(node, path, sizeof(path)) != VFS_OK) return node;
+	for (unsigned int i = 1U; i < mount_count; ++i) {
+		if (vfs_string_equals(mounts[i].path, path)) {
+			return mounts[i].root;
+		}
+	}
+	return node;
+}
+
+static struct vfs_node *vfs_mount_parent(const struct vfs_node *node)
+{
+	for (unsigned int i = 1U; i < mount_count; ++i) {
+		if (mounts[i].root == node) {
+			return mounts[i].mountpoint->parent;
+		}
+	}
+	return (struct vfs_node *)0;
+}
+
+int vfs_node_is_mountpoint(const struct vfs_node *node)
+{
+	char path[VFS_PATH_MAX];
+	if (vfs_format_path(node, path, sizeof(path)) != VFS_OK) return 0;
+	for (unsigned int i = 1U; i < mount_count; ++i) {
+		if (vfs_string_equals(mounts[i].path, path)) return 1;
+	}
+	return 0;
+}
+
+static int vfs_node_is_mount_root(const struct vfs_node *node)
+{
+	for (unsigned int i = 1U; i < mount_count; ++i)
+		if (mounts[i].root == node) return 1;
+	return 0;
+}
+
+static const struct vfs_mount_record *vfs_owner(const struct vfs_node *node)
+{
+	const struct vfs_node *cursor = node;
+	while (cursor != (const struct vfs_node *)0) {
+		for (unsigned int i = 0U; i < mount_count; ++i) {
+			if (mounts[i].root == cursor) return &mounts[i];
+		}
+		cursor = cursor->parent;
+	}
+	return &mounts[0];
+}
+
+int vfs_same_mount(const struct vfs_node *left, const struct vfs_node *right)
+{
+	return vfs_owner(left) == vfs_owner(right);
+}
+
+unsigned int vfs_mount_count(void)
+{
+	return mount_count;
+}
+
+enum vfs_error vfs_mount_path(unsigned int index, char *buffer, u64 capacity)
+{
+	if (index >= mount_count) return VFS_NOT_FOUND;
+	return vfs_format_path(mounts[index].root, buffer, capacity);
+}
+
+const char *vfs_mount_filesystem_at(unsigned int index)
+{
+	return index < mount_count ? mounts[index].filesystem : (const char *)0;
+}
+
+const char *vfs_mount_device_at(unsigned int index)
+{
+	return index < mount_count ? mounts[index].device : (const char *)0;
 }
 
 enum vfs_error vfs_lookup(struct vfs_node *directory, const char *name,
@@ -145,7 +263,10 @@ enum vfs_error vfs_resolve(struct vfs_node *cwd, const char *path,
 			continue;
 		}
 		if (vfs_string_equals(component, "..")) {
-			if (current->parent != (struct vfs_node *)0) {
+			struct vfs_node *parent = vfs_mount_parent(current);
+			if (parent != (struct vfs_node *)0) {
+				current = parent;
+			} else if (current->parent != (struct vfs_node *)0) {
 				current = current->parent;
 			}
 			continue;
@@ -154,6 +275,7 @@ enum vfs_error vfs_resolve(struct vfs_node *cwd, const char *path,
 		if (error != VFS_OK) {
 			return error;
 		}
+		current = vfs_follow_mount(current);
 	}
 }
 
@@ -361,6 +483,9 @@ enum vfs_error vfs_remove(struct vfs_node *cwd, const char *path)
 	if (node == root_node) {
 		return VFS_INVALID_PATH;
 	}
+	if (vfs_node_is_mount_root(node) || vfs_node_is_mountpoint(node)) {
+		return VFS_BUSY;
+	}
 	if (vfs_current_or_ancestor(node, cwd) != 0) {
 		return VFS_BUSY;
 	}
@@ -381,6 +506,9 @@ enum vfs_error vfs_rmdir(struct vfs_node *cwd, const char *path)
 	}
 	if (node == root_node) {
 		return VFS_INVALID_PATH;
+	}
+	if (vfs_node_is_mount_root(node) || vfs_node_is_mountpoint(node)) {
+		return VFS_BUSY;
 	}
 	if (vfs_current_or_ancestor(node, cwd) != 0) {
 		return VFS_BUSY;
@@ -409,6 +537,9 @@ enum vfs_error vfs_rename(struct vfs_node *cwd, const char *source,
 	if (node == root_node) {
 		return VFS_INVALID_PATH;
 	}
+	if (vfs_node_is_mount_root(node) || vfs_node_is_mountpoint(node)) {
+		return VFS_BUSY;
+	}
 	if (vfs_current_or_ancestor(node, cwd) != 0) {
 		return VFS_BUSY;
 	}
@@ -419,6 +550,9 @@ enum vfs_error vfs_rename(struct vfs_node *cwd, const char *source,
 	if (parent == (struct vfs_node *)0 ||
 		parent->type != VFS_NODE_DIRECTORY) {
 		return VFS_NOT_DIRECTORY;
+	}
+	if (!vfs_same_mount(node, parent)) {
+		return VFS_CROSS_DEVICE;
 	}
 	if (vfs_lookup(parent, name, &existing) == VFS_OK) {
 		return VFS_ALREADY_EXISTS;
@@ -452,6 +586,10 @@ enum vfs_error vfs_format_path(const struct vfs_node *node, char *buffer,
 		return VFS_INVALID_PATH;
 	}
 	while (current != root_node && current != (const struct vfs_node *)0) {
+		if (vfs_node_is_mount_root(current)) {
+			current = current->parent;
+			continue;
+		}
 		if (count == 32ULL) {
 			return VFS_TOO_LARGE;
 		}
@@ -494,6 +632,7 @@ const char *vfs_error_string(enum vfs_error error)
 	case VFS_TOO_LARGE: return "Path or file is too large";
 	case VFS_NOT_EMPTY: return "Directory is not empty";
 	case VFS_BUSY: return "Cannot modify the current directory or its ancestor";
+	case VFS_CROSS_DEVICE: return "Cannot move across filesystems";
 	default: return "Invalid path";
 	}
 }

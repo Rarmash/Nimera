@@ -14,6 +14,7 @@ enum nimfs_result {
 
 int nimfs_format(struct block_device *device);
 int nimfs_mount(struct block_device *device);
+int nimfs_mount_at(struct block_device *device, struct vfs_node *mountpoint);
 enum vfs_error nimfs_create_initial_tree(void);
 const char *nimfs_error_string(int error);
 u64 nimfs_free_blocks(void);
