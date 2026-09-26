@@ -1,6 +1,7 @@
 // No libc, allocator, or runtime are needed for this milestone.
 
 #include <nimera/console.h>
+#include <nimera/exception.h>
 #include <nimera/format.h>
 #include <nimera/memory.h>
 #include <nimera/panic.h>
@@ -52,6 +53,13 @@ void kernel_main(void)
 	format_u64_decimal(info.physical_size / (1024ULL * 1024ULL));
 	console_write(" MiB\r\nMemory test complete.\r\n");
 	return;
+#endif
+
+#if NIMERA_EXCEPTION_TEST
+	console_write("Nimera exception test\r\nCurrentEL: ");
+	format_u64_decimal(exception_current_el());
+	console_write("\r\n");
+	exception_test_trigger();
 #endif
 
 	console_write("Nimera booting...\r\n");

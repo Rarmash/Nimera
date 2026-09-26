@@ -12,6 +12,7 @@ QEMU ?= qemu-system-aarch64
 PANIC_TEST ?= 0
 TIMER_TEST ?= 0
 MEMORY_TEST ?= 0
+EXCEPTION_TEST ?= 0
 QEMU_MEMORY ?= 128M
 
 CFLAGS := \
@@ -29,7 +30,8 @@ CFLAGS := \
 	-Iinclude \
 	-DNIMERA_PANIC_TEST=$(PANIC_TEST) \
 	-DNIMERA_TIMER_TEST=$(TIMER_TEST) \
-	-DNIMERA_MEMORY_TEST=$(MEMORY_TEST)
+	-DNIMERA_MEMORY_TEST=$(MEMORY_TEST) \
+	-DNIMERA_EXCEPTION_TEST=$(EXCEPTION_TEST)
 
 LDFLAGS := \
 	-T linker.ld \
@@ -38,9 +40,9 @@ LDFLAGS := \
 	-z max-page-size=0x1000 \
 	-Map=$(MAP)
 
-OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/qemu-memory.o $(BUILD_DIR)/format.o $(BUILD_DIR)/shell.o $(BUILD_DIR)/uart.o
+OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/exception-vector.o $(BUILD_DIR)/halt.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/exception.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/qemu-memory.o $(BUILD_DIR)/format.o $(BUILD_DIR)/shell.o $(BUILD_DIR)/uart.o $(BUILD_DIR)/arch-exception.o
 
-.PHONY: build run run-panic run-timer run-memory clean
+.PHONY: build run run-panic run-timer run-memory run-exception clean
 
 build: $(ELF)
 
@@ -50,7 +52,13 @@ $(ELF): $(OBJECTS) linker.ld | $(BUILD_DIR)/.dir
 $(BUILD_DIR)/boot.o: arch/aarch64/boot.S | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/main.o: kernel/main.c | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/exception-vector.o: arch/aarch64/exception.S | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/halt.o: arch/aarch64/halt.S | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/main.o: kernel/main.c include/nimera/exception.h include/nimera/format.h include/nimera/memory.h include/nimera/panic.h include/nimera/shell.h include/nimera/timer.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/console.o: kernel/console.c include/nimera/console.h | $(BUILD_DIR)/.dir
@@ -59,10 +67,16 @@ $(BUILD_DIR)/console.o: kernel/console.c include/nimera/console.h | $(BUILD_DIR)
 $(BUILD_DIR)/panic.o: kernel/panic.c include/nimera/console.h include/nimera/panic.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/exception.o: kernel/exception.c include/nimera/console.h include/nimera/exception.h include/nimera/format.h include/nimera/halt.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/timer.o: kernel/timer.c include/nimera/panic.h include/nimera/timer.h include/nimera/types.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/arch-timer.o: arch/aarch64/timer.c include/nimera/types.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/arch-exception.o: arch/aarch64/exception.c arch/aarch64/exception.S include/nimera/exception.h include/nimera/types.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/memory.o: kernel/memory.c include/nimera/memory.h include/nimera/types.h | $(BUILD_DIR)/.dir
@@ -124,5 +138,15 @@ run-memory:
 		-serial stdio \
 		-device loader,file=build-memory/baremetal-aarch64.elf,cpu-num=0
 
+run-exception:
+	$(MAKE) BUILD_DIR=build-exception PANIC_TEST=0 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=1 build
+	$(QEMU) \
+		-machine virt \
+		-cpu cortex-a72 \
+		-nographic \
+		-monitor none \
+		-serial stdio \
+		-device loader,file=build-exception/baremetal-aarch64.elf,cpu-num=0
+
 clean:
-	rm -rf build build-panic build-timer build-memory
+	rm -rf build build-panic build-timer build-memory build-exception

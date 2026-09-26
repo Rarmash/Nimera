@@ -8,6 +8,7 @@
 	.type _start, %function
 	.extern kernel_main
 	.extern __stack_top
+	.extern exception_init
 
 _start:
 	// Form the absolute address of the stack top without a runtime or GOT.
@@ -16,6 +17,7 @@ _start:
 
 	// AArch64 requires SP to be 16-byte aligned at public call boundaries.
 	mov	sp, x0
+	bl	exception_init
 	bl	kernel_main
 
 // Returning from C must never fall through into arbitrary memory.

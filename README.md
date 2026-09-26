@@ -24,10 +24,12 @@ The current milestone successfully:
 - accepts polling UART input and echoes printable input while editing a line;
 - provides a minimal kernel panic path that reports a reason and halts safely;
 - reads the AArch64 Generic Timer to measure monotonic elapsed time; and
-- discovers the physical RAM region from QEMU's Device Tree Blob; and
+- discovers the physical RAM region from QEMU's Device Tree Blob;
+- installs a minimal AArch64 exception vector table for the current execution
+  level; and
 - runs a small built-in kernel shell.
 
-There is currently no libc, allocator, interrupt subsystem, scheduler,
+There is currently no libc, allocator, hardware IRQ/GIC subsystem, scheduler,
 filesystem, userspace, or other larger OS subsystem.
 
 ## Boot flow
@@ -49,14 +51,31 @@ The entry point is `_start` in `arch/aarch64/boot.S`:
 
 1. `_start` computes the linker-defined `__stack_top` address.
 2. It moves that address into the AArch64 stack pointer, `sp`.
-3. It calls `kernel_main()` in `kernel/main.c`.
-4. `kernel_main()` initializes the timer, prints the boot messages, and starts
+3. It calls `exception_init()`, which reads `CurrentEL` and installs the
+   matching `VBAR_ELx` vector base.
+4. It calls `kernel_main()` in `kernel/main.c`.
+5. `kernel_main()` initializes the timer, prints the boot messages, and starts
    the built-in shell.
-5. The current console implementation delegates to the QEMU `virt` PL011
+6. The current console implementation delegates to the QEMU `virt` PL011
    driver, which writes output to the data register at `0x09000000` and polls
    input status.
-6. The shell reads input through the Console API, collects one fixed-size line,
+7. The shell reads input through the Console API, collects one fixed-size line,
    parses one of its built-in commands, and prints the next prompt.
+
+With the current QEMU `virt` plus generic-loader invocation, `CurrentEL` was
+verified at runtime as `EL1`. Nimera therefore installs `VBAR_EL1`; it does not
+perform an EL2-to-EL1 transition or assume one is needed.
+
+The vector table is a fixed, 2048-byte-aligned AArch64 table. Its synchronous,
+IRQ, FIQ, and SError slots enter small assembly stubs. Synchronous exceptions
+are reported diagnostically; the other categories currently use the same fatal
+path and are not an IRQ implementation.
+
+For a synchronous exception, `ESR_EL1` identifies the reason, `ELR_EL1` is the
+instruction address to which execution would return, and `FAR_EL1` is the
+faulting address when the exception supplies one. The report also shows the
+exception class (`EC`) and then halts the CPU. The analogous EL2 registers are
+used if the kernel is later started there.
 
 The shell is started directly by the kernel. It is not a user process and does
 not depend on a filesystem, current working directory, userspace, or external
@@ -65,10 +84,10 @@ programs.
 The input path is intentionally polling-based. It has no interrupts, history,
 autocomplete, cursor movement, shell scripting, or command registry.
 
-The panic path is separate from the normal echo flow. `panic()` writes a fatal
-message and reason through the common console API, prints `System halted.`, and
-then remains in a CPU-local `wfe` loop. It does not use UART or PL011 symbols
-directly.
+The panic and exception paths share a small architecture-specific `cpu_halt()`
+primitive. `panic()` writes a fatal message and reason through the common
+console API, prints `System halted.`, and then remains in a CPU-local `wfe`
+loop. It does not use UART or PL011 symbols directly.
 
 The timer path is also separate from the normal echo flow. The common timer API
 provides the counter frequency, the current counter value, and monotonic uptime
@@ -210,6 +229,16 @@ make run-memory QEMU_MEMORY=128M
 The test prints the physical base, byte count, and whole MiB count reported by
 the Device Tree. `build-memory/` is kept separate from the ordinary build.
 
+To exercise the exception vector with a deliberate undefined instruction, use:
+
+```sh
+make run-exception
+```
+
+This builds an isolated image in `build-exception/` with
+`EXCEPTION_TEST=1`. It prints the verified execution level and minimal
+synchronous-exception diagnostics, then halts without returning to the shell.
+
 The ordinary `make run` starts the built-in kernel shell. Its line buffer is a
 fixed 128-byte array: printable ASCII is echoed into it, Enter executes the
 line, and Backspace removes the previous character. Input beyond the buffer is
@@ -237,7 +266,9 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 ├── include/
 │   └── nimera/
 │       ├── console.h
+│       ├── exception.h
 │       ├── format.h
+│       ├── halt.h
 │       ├── memory.h
 │       ├── panic.h
 │       ├── shell.h
@@ -247,9 +278,13 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 ├── arch/
 │   └── aarch64/
 │       ├── boot.S
+│       ├── exception.S
+│       ├── exception.c
+│       ├── halt.S
 │       └── timer.c
 ├── kernel/
 │   ├── console.c
+│   ├── exception.c
 │   ├── format.c
 │   ├── main.c
 │   ├── memory.c
@@ -262,11 +297,18 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
         └── uart.c
 ```
 
-- `arch/aarch64/boot.S` — the only assembly file; installs the initial stack,
-  calls C, and provides the fallback loop if C returns.
+- `arch/aarch64/boot.S` — installs the initial stack, initializes exception
+  vectors, calls C, and provides the fallback loop if C returns.
+- `arch/aarch64/exception.S` — the 2048-byte-aligned vector table and minimal
+  register-capture stubs.
+- `arch/aarch64/exception.c` — reads `CurrentEL`, installs `VBAR_EL1` or
+  `VBAR_EL2`, and contains the deliberate exception-test instruction.
+- `arch/aarch64/halt.S` — the small `wfe`-based `cpu_halt()` primitive.
 - `include/nimera/console.h` — the small platform-independent console API.
+- `include/nimera/exception.h` — exception initialization and fatal-report API.
 - `include/nimera/format.h` — minimal unsigned decimal and hexadecimal output
   helpers used where a number must be displayed.
+- `include/nimera/halt.h` — the architecture-neutral CPU halt declaration.
 - `include/nimera/shell.h` — the non-returning built-in shell entry point.
 - `include/nimera/memory.h` — the common physical memory information API.
 - `include/nimera/panic.h` — the non-returning `panic()` API.
@@ -275,6 +317,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `include/nimera/types.h` — the minimal freestanding `u64` type definition.
 - `kernel/console.c` — delegates the common console API to the current UART
   implementation.
+- `kernel/exception.c` — prints synchronous-exception diagnostics through the
+  Console API and halts the CPU.
 - `kernel/main.c` — defines `kernel_main()`, initializes the timer, and starts
   the shell or one of the isolated runtime tests; it does not call UART
   functions directly.
@@ -296,8 +340,9 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `virt`.
 - `linker.ld` — defines `_start`, the fixed image address, ELF sections, and a
   16 KiB private stack in `NOLOAD` `.bss`.
-- `Makefile` — builds eleven object files and links them directly with LLD;
-  provides `build`, `run`, `run-panic`, `run-timer`, `run-memory`, and `clean`.
+- `Makefile` — builds the freestanding objects and links them directly with
+  LLD; provides `build`, `run`, `run-panic`, `run-timer`, `run-memory`,
+  `run-exception`, and `clean`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -319,10 +364,10 @@ This is a freestanding program rather than a hosted application:
   that would require additional runtime support.
 - `-Iinclude` makes the project's freestanding headers available without
   depending on host or libc headers.
-- `-DNIMERA_PANIC_TEST=0`, `-DNIMERA_TIMER_TEST=0`, and
-  `-DNIMERA_MEMORY_TEST=0` keep the normal build path free of test flows; the
-  dedicated Make targets enable their respective switch in isolated build
-  directories.
+- `-DNIMERA_PANIC_TEST=0`, `-DNIMERA_TIMER_TEST=0`,
+  `-DNIMERA_MEMORY_TEST=0`, and `-DNIMERA_EXCEPTION_TEST=0` keep the normal
+  build path free of test flows; the dedicated Make targets enable their
+  respective switch in isolated build directories.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.

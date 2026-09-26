@@ -2,3 +2,4 @@ build/
 build-panic/
 build-timer/
 build-memory/
+build-exception/
