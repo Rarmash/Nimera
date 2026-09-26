@@ -230,6 +230,7 @@ static enum vfs_error ramfs_read(struct vfs_node *file, char *buffer,
 	}
 	node = ramfs_from_vfs(file);
 	if (capacity < node->size) {
+		*size = node->size;
 		return VFS_TOO_LARGE;
 	}
 	for (u64 index = 0ULL; index < node->size; ++index) {

@@ -49,6 +49,9 @@ The current milestone successfully:
   tree, and exposes it through a minimal VFS and mutable shell file commands.
 - decodes serial input into bounded logical key events and provides a small
   terminal screen-control API backed by host ANSI sequences.
+- provides NimEdit 0.1, a small built-in kernel text editor with VFS-backed
+  load/save, ASCII editing, cursor movement, vertical scrolling, dirty-state
+  tracking, and Ctrl-S/Ctrl-Q controls.
 
 There is currently no libc, `malloc/free`, persistent filesystem, userspace,
 processes, UART TX interrupt path, or other larger OS subsystem. The current
@@ -143,10 +146,30 @@ parser waiting forever; unknown sequences reset the parser state.
 The terminal screen API provides clear-screen, cursor movement, line clearing,
 cursor visibility, and default dimensions of 80 columns by 25 rows. The QEMU
 serial backend implements these operations with ANSI/VT escape sequences from
-the host terminal. Future NimEdit code should use this logical API rather than
-knowing PL011 registers or the ANSI protocol. There is no framebuffer, native
+the host terminal. NimEdit uses this logical API rather than knowing PL011
+registers or the ANSI protocol. There is no framebuffer, native
 graphics backend, Unicode input, terminal-size negotiation, or general VT100
 emulator yet.
+
+NimEdit 0.1 is entered with the shell command `edit <path>`. It is a kernel
+application, not a userspace process: it uses the common terminal and VFS APIs
+directly. Existing regular files are loaded into one growable flat byte buffer;
+missing files are created only when the first save succeeds. The buffer uses
+ASCII bytes and stores Enter as `\n`. Backspace, Delete, arrows, Home, End,
+preferred-column vertical movement, and clipping of long lines are supported.
+Ctrl-S saves, while Ctrl-Q exits cleanly; a dirty buffer requires a second
+Ctrl-Q. There is no search, undo, tabs, UTF-8 editing, or horizontal scrolling.
+The RAMFS is ephemeral, so saved files disappear when QEMU stops.
+
+The isolated editor self-test can be run with:
+
+```sh
+make run-editor
+```
+
+It exercises buffer growth and reallocation, editing and preferred-column
+navigation, load/save/reopen, dirty tracking, and heap cleanup without a fake
+keyboard input stream.
 
 The panic and exception paths share a small architecture-specific `cpu_halt()`
 primitive. `panic()` writes a fatal message and reason through the common
@@ -728,7 +751,9 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   coalescing, and validation of frees.
 - `kernel/shell.c` — fixed-buffer command shell using only the common Console
   API; it provides the built-in diagnostic and VFS commands plus basic line
-  editing.
+  editing and the `edit` launcher.
+- `kernel/editor.c` — the small built-in NimEdit buffer, editing operations,
+  terminal renderer, VFS load/save path, and isolated self-test.
 - `kernel/panic.c` — prints the panic report through Console API and halts in
   a simple `wfe` loop.
 - `kernel/pmm.c` — bitmap physical page manager initialized from the memory
@@ -741,6 +766,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   creation.
 - `kernel/ramfs.c` — the heap-backed in-memory directory/file nodes, geometric
   file-buffer growth, child unlinking, renaming, and minimal VFS operations.
+- `include/nimera/editor.h` — the small shell-to-editor entry-point API.
 - `kernel/timer.c` — validates timer frequency and exposes frequency, ticks,
   and monotonic milliseconds without architecture instructions.
 - `arch/aarch64/timer.c` — reads `CNTFRQ_EL0` and `CNTPCT_EL0` for the common
@@ -768,7 +794,9 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `run-pmm`, `run-heap`, `run-exception`, `run-mmu`, `run-mmu-fault`,
   `run-protection`, `run-protection-write`, `run-protection-exec`, `run-irq`,
   `run-uart-irq`, `run-uart-overflow`, `run-sched`, `run-blocking`, `run-vfs`,
-  `run-vfs-write`, `run-terminal`, and `clean`.
+  `run-vfs-write`, `run-terminal`, `run-editor`, and `clean`. Test builds use
+  separate directories so their compile-time paths cannot contaminate `make
+  run`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -810,6 +838,8 @@ This is a freestanding program rather than a hosted application:
   shell path; `make run-vfs-write` enables it in `build-vfs-write/`.
 - `-DNIMERA_TERMINAL_TEST=0` keeps the interactive key/screen test out of the
   normal shell path; `make run-terminal` enables it in `build-terminal/`.
+- `-DNIMERA_EDITOR_TEST=0` keeps the automated editor self-test out of the
+  normal shell path; `make run-editor` enables it in `build-editor/`.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.

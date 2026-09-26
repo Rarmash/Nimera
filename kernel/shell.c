@@ -1,4 +1,5 @@
 #include <nimera/console.h>
+#include <nimera/editor.h>
 #include <nimera/format.h>
 #include <nimera/irq.h>
 #include <nimera/memory.h>
@@ -65,6 +66,7 @@ static void shell_help(void)
 	console_write("  rm <file>\r\n");
 	console_write("  rmdir <directory>\r\n");
 	console_write("  mv <source> <destination>\r\n");
+	console_write("  edit <path>\r\n");
 }
 
 static void shell_ls(const char *path)
@@ -294,6 +296,15 @@ static void shell_mv(char *argument)
 	}
 }
 
+static void shell_edit(const char *path)
+{
+	if (path == (const char *)0) {
+		shell_fs_error(VFS_INVALID_PATH);
+		return;
+	}
+	(void)editor_run(shell_cwd, path);
+}
+
 static void shell_threads(void)
 {
 	unsigned int index;
@@ -452,6 +463,8 @@ static void shell_execute(char *line, unsigned int length)
 		shell_remove(argument, 1);
 	} else if (text_equals(line, "mv")) {
 		shell_mv(argument);
+	} else if (text_equals(line, "edit")) {
+		shell_edit(argument);
 	} else if (length != 0U) {
 		console_write("Unknown command: ");
 		console_write(line);

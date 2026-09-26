@@ -1,6 +1,7 @@
 // No libc, allocator, or runtime are needed for this milestone.
 
 #include <nimera/console.h>
+#include <nimera/editor.h>
 #include <nimera/exception.h>
 #include <nimera/format.h>
 #include <nimera/heap.h>
@@ -582,6 +583,10 @@ void kernel_main(void)
 #endif
 #if NIMERA_VFS_WRITE_TEST
 	vfs_write_test(heap_after_filesystem);
+	return;
+#endif
+#if NIMERA_EDITOR_TEST
+	editor_self_test(vfs_root());
 	return;
 #endif
 	(void)heap_before_filesystem;
