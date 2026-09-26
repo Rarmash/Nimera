@@ -72,6 +72,8 @@ static void shell_help(void)
 	console_write("  terminal\r\n");
 	console_write("  disks\r\n");
 	console_write("  mounts\r\n");
+	console_write("  mount <disk>\r\n");
+	console_write("  eject <path>\r\n");
 	console_write("  fsinfo\r\n");
 }
 
@@ -101,8 +103,118 @@ static void shell_mounts(void)
 		if (vfs_mount_device_at(index) != (const char *)0) {
 			console_write("  "); console_write(vfs_mount_device_at(index));
 		}
+		if (vfs_mount_label_at(index) != (const char *)0) {
+			console_write("  "); console_write(vfs_mount_label_at(index));
+		}
 		console_write("\r\n");
 	}
+}
+
+static unsigned int shell_volume_name_length(const char *text)
+{
+	unsigned int n = 0U;
+	while (text[n] != '\0' && n < VFS_NAME_MAX) ++n;
+	return n;
+}
+
+static void shell_volume_name_copy(char *destination, const char *source,
+					   unsigned int suffix)
+{
+	unsigned int n = shell_volume_name_length(source);
+	if (suffix == 1U) {
+		for (unsigned int i = 0U; i <= n; ++i) destination[i] = source[i];
+		return;
+	}
+	if (n > VFS_NAME_MAX - 2U) n = VFS_NAME_MAX - 2U;
+	for (unsigned int i = 0U; i < n; ++i) destination[i] = source[i];
+	destination[n++] = '-'; destination[n++] = (char)('0' + suffix);
+	destination[n] = '\0';
+}
+
+static void shell_mount(const char *argument)
+{
+	const struct block_device *device;
+	struct vfs_node *volumes;
+	struct vfs_node *mountpoint = (struct vfs_node *)0;
+	struct vfs_node *existing;
+	char label[NIMFS_LABEL_MAX + 1U];
+	char name[VFS_NAME_MAX + 1U];
+	int label_result;
+	int owns = 0;
+
+	if (argument == (const char *)0 || argument[0] == '\0') {
+		shell_fs_error(VFS_INVALID_PATH); return;
+	}
+	device = block_find(argument);
+	if (device == (const struct block_device *)0) {
+		console_write("No such block device\r\n"); return;
+	}
+	for (unsigned int i = 1U; i < vfs_mount_count(); ++i)
+		if (vfs_mount_device_at(i) != (const char *)0 &&
+			text_equals(vfs_mount_device_at(i), device->name)) {
+			console_write("Volume is already mounted\r\n"); return;
+		}
+	if (vfs_resolve(vfs_root(), "/volumes", &volumes) != VFS_OK) {
+		shell_fs_error(VFS_NOT_FOUND); return;
+	}
+	label_result = nimfs_volume_label((struct block_device *)device, label,
+						 sizeof(label));
+	if (label_result != NIMFS_OK) {
+		console_write(label_result == NIMFS_UNFORMATTED ?
+			"No supported filesystem on " : "Corrupt NimFS on ");
+		console_write(device->name); console_write("\r\n"); return;
+	}
+	for (unsigned int suffix = 1U; suffix < 10U; ++suffix) {
+		enum vfs_error error;
+		const char *base = label[0] == '\0' ? device->name : label;
+		shell_volume_name_copy(name, base, suffix);
+		error = vfs_resolve(volumes, name, &existing);
+		if (error == VFS_OK) {
+			if (vfs_node_type(existing) != VFS_NODE_DIRECTORY) continue;
+			if (vfs_node_is_mountpoint(existing)) continue;
+			mountpoint = existing;
+			owns = vfs_readdir(existing, 0U, &existing) != VFS_OK;
+			break;
+		}
+		if (error != VFS_NOT_FOUND) continue;
+		if (vfs_mkdir(volumes, name, &mountpoint) == VFS_OK) {
+			owns = 1; break;
+		}
+	}
+	if (mountpoint == (struct vfs_node *)0) {
+		console_write("No free volume name\r\n"); return;
+	}
+	if (nimfs_mount_at_owned((struct block_device *)device, mountpoint, owns) !=
+	    NIMFS_OK) {
+		if (owns != 0) (void)vfs_rmdir(volumes, name);
+		console_write("Unable to mount NimFS on "); console_write(device->name);
+		console_write("\r\n"); return;
+	}
+	console_write("Mounted "); console_write(vfs_mount_label_at(vfs_mount_count() - 1U) ==
+		(const char *)0 ? name : vfs_mount_label_at(vfs_mount_count() - 1U));
+	console_write(" on /volumes/"); console_write(name); console_write("\r\n");
+}
+
+static void shell_eject(const char *argument)
+{
+	char name[VFS_NAME_MAX + 1U];
+	unsigned int length = 0U;
+	if (argument == (const char *)0 || argument[0] == '\0') {
+		shell_fs_error(VFS_INVALID_PATH); return;
+	}
+	while (argument[length] != '\0') ++length;
+	while (length != 0U && argument[length - 1U] != '/') --length;
+	{
+		unsigned int n = 0U;
+		while (argument[length + n] != '\0' && n < VFS_NAME_MAX)
+			{ name[n] = argument[length + n]; ++n; }
+		name[n] = '\0';
+	}
+	{
+		enum vfs_error error = vfs_unmount_path(shell_cwd, argument);
+		if (error != VFS_OK) { shell_fs_error(error); return; }
+	}
+	console_write("Ejected "); console_write(name); console_write("\r\n");
 }
 
 static void shell_fsinfo(void)
@@ -534,6 +646,10 @@ static void shell_execute(char *line, unsigned int length)
 		shell_disks();
 	} else if (text_equals(line, "mounts")) {
 		shell_mounts();
+	} else if (text_equals(line, "mount")) {
+		shell_mount(argument);
+	} else if (text_equals(line, "eject")) {
+		shell_eject(argument);
 	} else if (text_equals(line, "fsinfo")) {
 		shell_fsinfo();
 	} else if (length != 0U) {

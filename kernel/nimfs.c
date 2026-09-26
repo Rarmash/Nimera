@@ -42,6 +42,7 @@ struct nimfs_state {
   u32 inode_blocks;
   u32 data_start;
   u32 root_inode;
+  char label[NIMFS_LABEL_MAX + 1U];
   unsigned char *bitmap;
   struct nimfs_inode *inodes;
 };
@@ -83,6 +84,27 @@ static int same(const char *a, const char *b) {
   while (a[i] && b[i] && a[i] == b[i])
     ++i;
   return a[i] == '\0' && b[i] == '\0';
+}
+static int valid_label(const char *label) {
+  unsigned int n = 0U;
+  if (label == (const char *)0 || label[0] == '\0') return 1;
+  while (label[n] != '\0') {
+    unsigned char c = (unsigned char)label[n];
+    if (n == NIMFS_LABEL_MAX || c < 0x20U || c >= 0x7fU || c == '/') return 0;
+    ++n;
+  }
+  return !(same(label, ".") || same(label, ".."));
+}
+static int load_label(const unsigned char *p, char *label) {
+  unsigned int n = 0U;
+  while (n <= NIMFS_LABEL_MAX && p[n] != '\0') {
+    unsigned char c = p[n];
+    if (c < 0x20U || c >= 0x7fU || c == '/') return NIMFS_CORRUPT;
+    label[n++] = (char)c;
+  }
+  if (n > NIMFS_LABEL_MAX) return NIMFS_CORRUPT;
+  label[n] = '\0';
+  return 0;
 }
 static unsigned int length(const char *s) {
   unsigned int n = 0;
@@ -541,11 +563,13 @@ static int validate_superblock(void) {
       fs.data_start >= fs.total_blocks || fs.root_inode == 0U ||
       fs.root_inode >= NIMFS_INODES)
     return NIMFS_CORRUPT;
+  if (load_label(io_buffer + 52, fs.label) != 0)
+    return NIMFS_CORRUPT;
   return NIMFS_OK;
 }
 
 static int nimfs_mount_internal(struct block_device *device,
-                                struct vfs_node *mountpoint) {
+                                struct vfs_node *mountpoint, int owned_mountpoint) {
   if (device == 0 || device->block_size != NIMFS_BLOCK_SIZE)
     return NIMFS_CORRUPT;
   active_context = select_context(device);
@@ -577,21 +601,29 @@ static int nimfs_mount_internal(struct block_device *device,
   root_node->vfs.operations = &ops;
   root = &root_node->vfs;
   if ((mountpoint == (struct vfs_node *)0 ? vfs_mount_root(root) :
-       vfs_mount_at(mountpoint, root, "NimFS", device->name)) != VFS_OK)
+       vfs_mount_at(mountpoint, root, "NimFS", device->name, fs.label,
+                    owned_mountpoint)) != VFS_OK)
     return NIMFS_CORRUPT;
   if (mountpoint == (struct vfs_node *)0) vfs_set_mount_info("NimFS", device->name);
   return NIMFS_OK;
 }
 
-int nimfs_mount(struct block_device *device) { return nimfs_mount_internal(device, (struct vfs_node *)0); }
-
-int nimfs_mount_at(struct block_device *device, struct vfs_node *mountpoint) {
-  return nimfs_mount_internal(device, mountpoint);
+int nimfs_mount(struct block_device *device) {
+  return nimfs_mount_internal(device, (struct vfs_node *)0, 0);
 }
 
-int nimfs_format(struct block_device *device) {
+int nimfs_mount_at(struct block_device *device, struct vfs_node *mountpoint) {
+  return nimfs_mount_internal(device, mountpoint, 1);
+}
+
+int nimfs_mount_at_owned(struct block_device *device,
+                         struct vfs_node *mountpoint, int owned_mountpoint) {
+  return nimfs_mount_internal(device, mountpoint, owned_mountpoint);
+}
+
+int nimfs_format_labeled(struct block_device *device, const char *label) {
   if (device == 0 || device->block_size != NIMFS_BLOCK_SIZE ||
-      device->block_count < 1024ULL)
+      device->block_count < 1024ULL || !valid_label(label))
     return NIMFS_CORRUPT;
   active_context = select_context(device);
   if (active_context == (struct nimfs_state *)0) return NIMFS_NO_SPACE;
@@ -605,6 +637,10 @@ int nimfs_format(struct block_device *device) {
   fs.inode_blocks = 128U;
   fs.data_start = fs.inode_start + fs.inode_blocks;
   fs.root_inode = 1U;
+  for (unsigned int i = 0U; i <= NIMFS_LABEL_MAX; ++i) fs.label[i] = '\0';
+  if (label != (const char *)0)
+    for (unsigned int i = 0U; i < NIMFS_LABEL_MAX && label[i] != '\0'; ++i)
+      fs.label[i] = label[i];
   fs.bitmap = bitmap_cache[active_context_index()];
   fs.inodes = inode_cache[active_context_index()];
   zero(fs.bitmap, (u64)fs.bitmap_blocks * 512ULL);
@@ -643,8 +679,34 @@ int nimfs_format(struct block_device *device) {
   put32(io_buffer + 40, fs.data_start);
   put32(io_buffer + 44, NIMFS_INODES);
   put32(io_buffer + 48, NIMFS_INODE_SIZE);
+  for (unsigned int i = 0U; i < NIMFS_LABEL_MAX &&
+       label != (const char *)0 && label[i] != '\0'; ++i)
+    io_buffer[52U + i] = (unsigned char)label[i];
   if (disk_write(0, io_buffer) != 0)
     return NIMFS_IO;
+  return NIMFS_OK;
+}
+
+int nimfs_format(struct block_device *device) {
+  return nimfs_format_labeled(device, (const char *)0);
+}
+
+int nimfs_volume_label(struct block_device *device, char *label, u64 capacity) {
+  if (device == (struct block_device *)0 || label == (char *)0 || capacity == 0ULL)
+    return NIMFS_CORRUPT;
+  if (block_read(device, 0ULL, io_buffer) != BLOCK_OK)
+    return NIMFS_IO;
+  if (le32(io_buffer) != NIMFS_MAGIC || le32(io_buffer + 4) != NIMFS_VERSION ||
+      le32(io_buffer + 8) != NIMFS_BLOCK_SIZE)
+    return le32(io_buffer) == NIMFS_MAGIC ? NIMFS_CORRUPT : NIMFS_UNFORMATTED;
+  {
+    char parsed[NIMFS_LABEL_MAX + 1U];
+    unsigned int n;
+    if (load_label(io_buffer + 52, parsed) != 0) return NIMFS_CORRUPT;
+    n = length(parsed);
+    if ((u64)n + 1ULL > capacity) return NIMFS_NO_SPACE;
+    for (unsigned int i = 0U; i <= n; ++i) label[i] = parsed[i];
+  }
   return NIMFS_OK;
 }
 

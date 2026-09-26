@@ -28,4 +28,5 @@ build-nimfs-format/
 build-nimfs-multi-format/
 build-nimfs-multi/
 build-mounts/
+build-volume/
 build-run/

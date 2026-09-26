@@ -37,9 +37,11 @@ NIMFS_BOOT ?= 0
 NIMFS_FORMAT_TEST ?= 0
 NIMFS_MULTI_FORMAT_TEST ?= 0
 NIMFS_MOUNT_TEST ?= 0
+NIMFS_VOLUME_TEST ?= 0
 NIMFS_STORAGE_IMAGE ?= build-storage/nimfs.img
 NIMFS_ROOT_IMAGE ?= build-storage/nimfs-root.img
 NIMFS_DATA_IMAGE ?= build-storage/nimfs-data.img
+NIMFS_DATA2_IMAGE ?= build-storage/nimfs-data2.img
 STORAGE_DIR ?= build-storage
 STORAGE_IMAGE ?= $(STORAGE_DIR)/nimera-test.img
 STORAGE_SIZE ?= 64M
@@ -86,7 +88,8 @@ CFLAGS := \
 	-DNIMERA_NIMFS_BOOT=$(NIMFS_BOOT) \
 	-DNIMERA_NIMFS_FORMAT_TEST=$(NIMFS_FORMAT_TEST) \
 	-DNIMERA_NIMFS_MULTI_FORMAT_TEST=$(NIMFS_MULTI_FORMAT_TEST) \
-	-DNIMERA_NIMFS_MOUNT_TEST=$(NIMFS_MOUNT_TEST)
+	-DNIMERA_NIMFS_MOUNT_TEST=$(NIMFS_MOUNT_TEST) \
+	-DNIMERA_NIMFS_VOLUME_TEST=$(NIMFS_VOLUME_TEST)
 
 LDFLAGS := \
 	-T linker.ld \
@@ -97,7 +100,7 @@ LDFLAGS := \
 
 OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/exception-vector.o $(BUILD_DIR)/halt.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/terminal.o $(BUILD_DIR)/editor.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/exception.o $(BUILD_DIR)/irq.o $(BUILD_DIR)/scheduler.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/nimfs.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/arch-irq.o $(BUILD_DIR)/mmu.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/qemu-memory.o $(BUILD_DIR)/qemu-irq.o $(BUILD_DIR)/qemu-virtio.o $(BUILD_DIR)/gic.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/heap.o $(BUILD_DIR)/format.o $(BUILD_DIR)/shell.o $(BUILD_DIR)/block.o $(BUILD_DIR)/uart.o $(BUILD_DIR)/arch-exception.o
 
-.PHONY: build run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset run-nimfs-format run-nimfs run-nimfs-multi-format run-nimfs-multi run-mounts clean
+.PHONY: build run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
 
 build: $(ELF)
 
@@ -185,7 +188,7 @@ $(BUILD_DIR)/format.o: kernel/format.c include/nimera/console.h include/nimera/f
 $(BUILD_DIR)/block.o: kernel/block.c include/nimera/block.h include/nimera/panic.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/nimfs.o: kernel/nimfs.c include/nimera/heap.h include/nimera/nimfs.h include/nimera/panic.h include/nimera/version.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/nimfs.o: kernel/nimfs.c include/nimera/heap.h include/nimera/nimfs.h include/nimera/panic.h include/nimera/version.h include/nimera/vfs.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/shell.o: kernel/shell.c include/nimera/console.h include/nimera/editor.h include/nimera/format.h include/nimera/heap.h include/nimera/irq.h include/nimera/memory.h include/nimera/mmu.h include/nimera/nimfs.h include/nimera/pmm.h include/nimera/scheduler.h include/nimera/shell.h include/nimera/terminal.h include/nimera/timer.h include/nimera/version.h include/nimera/vfs.h | $(BUILD_DIR)/.dir
@@ -486,6 +489,14 @@ nimfs-data-reset:
 	rm -f $(NIMFS_DATA_IMAGE)
 	$(MAKE) nimfs-data-create
 
+nimfs-data2-create:
+	mkdir -p $(STORAGE_DIR)
+	@test -e $(NIMFS_DATA2_IMAGE) || $(QEMU_IMG) create -f raw $(NIMFS_DATA2_IMAGE) 64M
+
+nimfs-data2-reset:
+	rm -f $(NIMFS_DATA2_IMAGE)
+	$(MAKE) nimfs-data2-create
+
 nimfs-root-reset:
 	rm -f $(NIMFS_ROOT_IMAGE)
 	$(MAKE) nimfs-root-create
@@ -510,6 +521,19 @@ run-nimfs-multi: nimfs-root-create nimfs-data-create
 	$(MAKE) BUILD_DIR=build-nimfs-multi NIMFS_FORMAT_TEST=0 NIMFS_BOOT=1 TERMINAL_SIZE_NO_RESPONSE=1 BLOCK_TEST=0 build
 	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_DATA_IMAGE),format=raw,id=nimfs-data -device virtio-blk-device,drive=nimfs-data -drive if=none,file=$(NIMFS_ROOT_IMAGE),format=raw,id=nimfs-root -device virtio-blk-device,drive=nimfs-root -device loader,file=build-nimfs-multi/baremetal-aarch64.elf,cpu-num=0
 
+run-nimfs-data-format: run-nimfs-multi-format
+
+run-nimfs-volume-format: nimfs-root-create nimfs-data-create nimfs-data2-create
+	rm -rf build-nimfs-volume-format
+	$(MAKE) BUILD_DIR=build-nimfs-volume-format NIMFS_FORMAT_TEST=1 NIMFS_MULTI_FORMAT_TEST=1 NIMFS_BOOT=0 BLOCK_TEST=0 build
+	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_DATA2_IMAGE),format=raw,id=nimfs-data2 -device virtio-blk-device,drive=nimfs-data2 -drive if=none,file=$(NIMFS_DATA_IMAGE),format=raw,id=nimfs-data -device virtio-blk-device,drive=nimfs-data -drive if=none,file=$(NIMFS_ROOT_IMAGE),format=raw,id=nimfs-root -device virtio-blk-device,drive=nimfs-root -device loader,file=build-nimfs-volume-format/baremetal-aarch64.elf,cpu-num=0
+
+run-volume: nimfs-root-reset nimfs-data-reset nimfs-data2-reset
+	$(MAKE) run-nimfs-volume-format
+	rm -rf build-volume
+	$(MAKE) BUILD_DIR=build-volume NIMFS_FORMAT_TEST=0 NIMFS_BOOT=1 NIMFS_VOLUME_TEST=1 BLOCK_TEST=0 build
+	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_DATA2_IMAGE),format=raw,id=nimfs-data2 -device virtio-blk-device,drive=nimfs-data2 -drive if=none,file=$(NIMFS_DATA_IMAGE),format=raw,id=nimfs-data -device virtio-blk-device,drive=nimfs-data -drive if=none,file=$(NIMFS_ROOT_IMAGE),format=raw,id=nimfs-root -device virtio-blk-device,drive=nimfs-root -device loader,file=build-volume/baremetal-aarch64.elf,cpu-num=0
+
 run-mounts: nimfs-root-reset nimfs-data-reset
 	$(MAKE) run-nimfs-multi-format
 	rm -rf build-mounts
@@ -517,4 +541,4 @@ run-mounts: nimfs-root-reset nimfs-data-reset
 	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_DATA_IMAGE),format=raw,id=nimfs-data -device virtio-blk-device,drive=nimfs-data -drive if=none,file=$(NIMFS_ROOT_IMAGE),format=raw,id=nimfs-root -device virtio-blk-device,drive=nimfs-root -device loader,file=build-mounts/baremetal-aarch64.elf,cpu-num=0
 
 clean:
-	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-mounts
+	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume

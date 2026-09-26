@@ -11,8 +11,10 @@ struct vfs_mount_record {
 	struct vfs_node *mountpoint;
 	struct vfs_node *root;
 	char path[VFS_PATH_MAX];
+	char label[VFS_VOLUME_LABEL_MAX + 1U];
 	const char *filesystem;
 	const char *device;
+	int owned_mountpoint;
 };
 static struct vfs_mount_record mounts[VFS_MAX_MOUNTS];
 static unsigned int mount_count;
@@ -114,13 +116,14 @@ enum vfs_error vfs_mount_root(struct vfs_node *root)
 	root_node = root;
 	root->parent = (struct vfs_node *)0;
 	mount_count = 1U;
-	mounts[0] = (struct vfs_mount_record){(struct vfs_node *)0, root, "/",
-		"RAMFS", (const char *)0};
+	mounts[0] = (struct vfs_mount_record){(struct vfs_node *)0, root, "/", "",
+		"RAMFS", (const char *)0, 0};
 	return VFS_OK;
 }
 
 enum vfs_error vfs_mount_at(struct vfs_node *mountpoint,
-		struct vfs_node *root, const char *filesystem, const char *device)
+		struct vfs_node *root, const char *filesystem, const char *device,
+		const char *label, int owned_mountpoint)
 {
 	if (mountpoint == (struct vfs_node *)0 || root == (struct vfs_node *)0 ||
 		mountpoint->type != VFS_NODE_DIRECTORY || root->type != VFS_NODE_DIRECTORY ||
@@ -134,8 +137,14 @@ enum vfs_error vfs_mount_at(struct vfs_node *mountpoint,
 	}
 	mounts[mount_count].mountpoint = mountpoint;
 	mounts[mount_count].root = root;
+	for (unsigned int i = 0U; i <= VFS_VOLUME_LABEL_MAX; ++i)
+		mounts[mount_count].label[i] = '\0';
+	if (label != (const char *)0)
+		for (unsigned int i = 0U; i < VFS_VOLUME_LABEL_MAX && label[i] != '\0'; ++i)
+			mounts[mount_count].label[i] = label[i];
 	mounts[mount_count].filesystem = filesystem;
 	mounts[mount_count].device = device;
+	mounts[mount_count].owned_mountpoint = owned_mountpoint;
 	++mount_count;
 	return VFS_OK;
 }
@@ -215,6 +224,45 @@ const char *vfs_mount_filesystem_at(unsigned int index)
 const char *vfs_mount_device_at(unsigned int index)
 {
 	return index < mount_count ? mounts[index].device : (const char *)0;
+}
+
+const char *vfs_mount_label_at(unsigned int index)
+{
+	return index < mount_count && mounts[index].label[0] != '\0' ?
+		mounts[index].label : (const char *)0;
+}
+
+enum vfs_error vfs_unmount_path(struct vfs_node *cwd, const char *path)
+{
+	struct vfs_node *root;
+	unsigned int index = 0U;
+	struct vfs_mount_record removed;
+	enum vfs_error error = vfs_resolve(cwd, path, &root);
+
+	if (error != VFS_OK) return error;
+	for (; index < mount_count; ++index)
+		if (mounts[index].root == root) break;
+	if (index == 0U) return VFS_BUSY;
+	if (index == mount_count) return VFS_NOT_MOUNTED;
+	if (vfs_same_mount(cwd, root)) return VFS_BUSY;
+	removed = mounts[index];
+	for (unsigned int i = index + 1U; i < mount_count; ++i) {
+		unsigned int destination = i - 1U;
+		mounts[destination].mountpoint = mounts[i].mountpoint;
+		mounts[destination].root = mounts[i].root;
+		for (unsigned int j = 0U; j < VFS_PATH_MAX; ++j)
+			mounts[destination].path[j] = mounts[i].path[j];
+		for (unsigned int j = 0U; j <= VFS_VOLUME_LABEL_MAX; ++j)
+			mounts[destination].label[j] = mounts[i].label[j];
+		mounts[destination].filesystem = mounts[i].filesystem;
+		mounts[destination].device = mounts[i].device;
+		mounts[destination].owned_mountpoint = mounts[i].owned_mountpoint;
+	}
+	--mount_count;
+	root->parent = (struct vfs_node *)0;
+	if (removed.owned_mountpoint != 0 && removed.mountpoint != (struct vfs_node *)0)
+		return removed.mountpoint->operations->remove(removed.mountpoint);
+	return VFS_OK;
 }
 
 enum vfs_error vfs_lookup(struct vfs_node *directory, const char *name,
@@ -631,8 +679,9 @@ const char *vfs_error_string(enum vfs_error error)
 	case VFS_NO_MEMORY: return "Out of memory";
 	case VFS_TOO_LARGE: return "Path or file is too large";
 	case VFS_NOT_EMPTY: return "Directory is not empty";
-	case VFS_BUSY: return "Cannot modify the current directory or its ancestor";
+	case VFS_BUSY: return "Volume is busy";
 	case VFS_CROSS_DEVICE: return "Cannot move across filesystems";
+	case VFS_NOT_MOUNTED: return "Volume is not mounted";
 	default: return "Invalid path";
 	}
 }

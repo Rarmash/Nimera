@@ -62,7 +62,8 @@ The current milestone successfully:
 - provides NimFS v0, a versioned native persistent filesystem over a whole
   VirtIO block device. Regular files, directories, overwrite, append, rename,
   unlink, and empty-directory removal use the same VFS as RAMFS; an additional
-  NimFS volume can be mounted below `/volumes`.
+  NimFS volume can be mounted below `/volumes` with a persistent bounded label;
+  volumes can be logically ejected and remounted without formatting.
 
 There is currently no libc, userspace,
 processes, UART TX interrupt path, or other larger OS subsystem. The current
@@ -139,10 +140,18 @@ programs.
 
 In NimFS boot mode, `disk0` is mounted as `/` first. Additional discovered
 block devices are probed without formatting them. A valid secondary NimFS is
-mounted at `/volumes/<device-name>` (currently the deterministic fallback name,
-such as `disk1`); an unformatted or corrupt device is reported and skipped.
-VFS lookup follows this mount boundary transparently. Removing a mountpoint or
-renaming across filesystem boundaries is rejected.
+mounted at `/volumes/<label>` when it has a label, or at a deterministic device
+name such as `/volumes/disk1` when it does not. Duplicate labels receive names
+such as `Data-2`; existing non-empty user directories are never overwritten.
+An unformatted or corrupt device is reported and skipped. VFS lookup follows
+this mount boundary transparently. Removing a mountpoint or renaming across
+filesystem boundaries is rejected.
+
+`eject /volumes/Data` performs a logical unmount. It refuses a busy current
+working directory and never removes the underlying block device from the
+registry; `mount disk1` can mount a valid existing NimFS again and never formats
+it. `mounts` shows the path, filesystem, device, and label. This is lifecycle
+management for the current development registry, not hardware hotplug.
 
 The input path is interrupt-driven at the UART receive boundary. The UART IRQ
 handler drains the PL011 FIFO into the fixed ring and wakes a shell thread that
@@ -221,8 +230,9 @@ authoritative store.
 
 The original single-volume development image is `build-storage/nimfs.img`.
 The multi-volume targets use `build-storage/nimfs-root.img` and
-`build-storage/nimfs-data.img`, each 64 MiB. Formatting is always explicit and
-destructive:
+`build-storage/nimfs-data.img`, each 64 MiB. The volume lifecycle test also
+uses `build-storage/nimfs-data2.img` to verify duplicate-label naming.
+Formatting is always explicit and destructive:
 
 ```sh
 make nimfs-disk-reset
@@ -238,9 +248,16 @@ For the multi-volume development path use `make nimfs-root-create`,
 `make nimfs-data-create`, `make run-nimfs-multi-format`, then
 `make run-nimfs-multi`. `make run-mounts` resets both images, formats them in
 an isolated test build, and checks transparent traversal, mountpoint
-protection, and cross-filesystem rename rejection. `/tmp`, `/devices`, and
-`/volumes` are ordinary NimFS directories for now; tmpfs, devfs, labels, and
-automount policies beyond this boot-time development probe are future work.
+protection, and cross-filesystem rename rejection. `make run-volume` uses three
+images and checks labels, deterministic `Data-2` naming, busy-cwd protection,
+unmount cleanup, remount persistence, and the root-unmount guard. The explicit
+multi-volume format path is `make run-nimfs-data-format`.
+
+NimFS format version 1 stores a maximum 31-byte ASCII volume label in the
+previously reserved part of the superblock, so older v1 images remain valid
+and simply appear unlabeled. Labels cannot contain control characters, `/`,
+`.` or `..`. `/tmp`, `/devices`, and `/volumes` are ordinary NimFS directories
+for now; tmpfs, devfs, and hardware hotplug are future work.
 
 NimFS v0 has no journal or crash recovery. A power loss or QEMU termination
 during metadata writes may corrupt the image. It also does not implement
