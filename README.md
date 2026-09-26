@@ -42,7 +42,9 @@ The current milestone successfully:
   buffer while retaining polling TX; and
 - runs a small built-in kernel shell; and
 - preemptively switches between the shell thread and one background kernel
-  worker on the Generic Timer IRQ using a small round-robin scheduler.
+  worker on the Generic Timer IRQ using a small round-robin scheduler; and
+- blocks the shell thread while the RX ring is empty, then wakes it from the
+  PL011 receive IRQ without performing an immediate context switch.
 
 There is currently no libc, `malloc/free`, scheduler for user processes,
 filesystem, userspace, UART TX interrupt path, or other larger OS subsystem.
@@ -81,11 +83,13 @@ The entry point is `_start` in `arch/aarch64/boot.S`:
    UART SPI, and architected timer PPI from the DTB, maps the MMIO pages as
    Device memory, programs a 10 Hz absolute-deadline timer, and enables IRQs
    only after setup.
-8. An IRQ vector stub saves all general-purpose registers plus `ELR_EL1` and
+8. The fixed shell and worker thread table is initialized, then IRQs are
+   enabled.
+9. An IRQ vector stub saves all general-purpose registers plus `ELR_EL1` and
    `SPSR_EL1`, dispatches the GIC timer or UART interrupt, and returns with
    `eret`. A timer IRQ may replace the saved frame with another kernel thread's
    frame before that return.
-9. The shell reads input through the Console API, collects one fixed-size line,
+10. The shell reads input through the Console API, collects one fixed-size line,
    parses one of its built-in commands, and prints the next prompt.
 
 With the current QEMU `virt` plus generic-loader invocation, `CurrentEL` was
@@ -109,9 +113,13 @@ The shell is started directly by the kernel. It is not a user process and does
 not depend on a filesystem, current working directory, userspace, or external
 programs.
 
-The input path is interrupt-driven only at the UART receive boundary. The
-consumer waits on a small fixed ring buffer with `wfe`; the UART IRQ handler
-drains the PL011 FIFO and wakes it with `sev`. There is no history,
+The input path is interrupt-driven at the UART receive boundary. The UART IRQ
+handler drains the PL011 FIFO into the fixed ring and wakes a shell thread that
+is in `WAITING` state. The scheduler does not switch directly from the UART
+IRQ; the next timer IRQ performs the normal scheduling decision. An empty RX
+ring is checked and changed to `WAITING` with IRQs disabled, so an input byte
+cannot create a lost wakeup. `wfe` is only the parking instruction used after
+the thread has blocked, not a runnable polling loop. There is no history,
 autocomplete, cursor movement, shell scripting, or command registry. TX still
 polls PL011 readiness.
 
@@ -178,10 +186,21 @@ survive preemption, and the worker stack canary remains intact:
 make run-sched
 ```
 
-The shell remains a simple blocking consumer of the UART ring and has no
-WAITING thread state yet. These are kernel threads, not processes: there are no
-address spaces, userspace stacks, SMP, locks, or scheduler-aware shell sleep
-queues.
+The scheduler distinguishes `RUNNING`, `READY`, and `WAITING`. A blocked shell
+thread is skipped while the worker remains runnable. If no thread is READY, a
+minimal fallback returns to the current parked frame so an interrupt can make
+work runnable again; this is not a separate power-management subsystem.
+These are kernel threads, not processes: there are no address spaces, userspace
+stacks, SMP, generic wait queues, locks, or other synchronization primitives.
+
+The blocking path can be exercised with one input character:
+
+```sh
+make run-blocking
+```
+
+It reports that the worker progressed while the shell was waiting and then
+checks that the shell resumed after the UART wakeup.
 
 ## PL011 receive IRQ
 
@@ -206,10 +225,14 @@ the current single-core interrupt model. `volatile` controls compiler memory
 accesses; it is not a universal SMP synchronization primitive.
 
 `console_getc()` no longer reads PL011 registers or busy-spins. It checks the
-software queue and executes `wfe` while empty. The IRQ handler executes `sev`
-after publishing data. If the IRQ arrives between the empty check and `wfe`,
-the event remains pending and `wfe` returns immediately, so the wait does not
-depend on the periodic timer IRQ.
+software queue with IRQs disabled; when empty, it marks the current scheduler
+thread `WAITING`, restores the previous IRQ state, and parks with `wfe`. The
+IRQ handler executes `sev` after publishing data and changes the waiting shell
+thread to `READY`. If the IRQ arrives between the empty check and the waiting
+transition, it is held pending until the transition is complete, so the
+wakeup cannot be lost. The `sev` event also wakes a parked CPU; the actual
+context switch back to a shell that was already switched out remains
+timer-driven.
 
 ## Physical memory discovery
 
@@ -625,13 +648,14 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `kernel/heap.c` — the small PMM-backed first-fit heap with block splitting,
   coalescing, and validation of frees.
 - `kernel/shell.c` — fixed-buffer command shell using only the common Console
-  API; it provides the six built-in commands and basic line editing.
+  API; it provides the nine built-in commands and basic line editing.
 - `kernel/panic.c` — prints the panic report through Console API and halts in
   a simple `wfe` loop.
 - `kernel/pmm.c` — bitmap physical page manager initialized from the memory
   map; it has no heap or virtual-memory responsibilities.
 - `kernel/scheduler.c` — the two-thread round-robin scheduler, synthetic worker
-  context, stack checks, and isolated scheduler test.
+  context, `WAITING`/wakeup transitions, stack checks, and isolated scheduler
+  tests.
 - `kernel/timer.c` — validates timer frequency and exposes frequency, ticks,
   and monotonic milliseconds without architecture instructions.
 - `arch/aarch64/timer.c` — reads `CNTFRQ_EL0` and `CNTPCT_EL0` for the common
@@ -641,7 +665,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   physical memory node, DTB reservations, kernel range, and usable gaps; it
   does not implement an allocator.
 - `platform/qemu-virt/uart.c` — minimal PL011 MMIO input and output for QEMU
-  `virt`; TX is polling, while RX drains into the fixed interrupt-side ring.
+  `virt`; TX is polling, while RX drains into the fixed interrupt-side ring and
+  wakes the blocked console consumer.
 - `platform/qemu-virt/irq.c` — minimal DTB discovery of the GICv2 MMIO ranges
   and the architected timer PPI.
 - `platform/qemu-virt/gic.c` — minimal one-CPU GICv2 setup, acknowledge, and
@@ -656,7 +681,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   LLD; provides `build`, `run`, `run-panic`, `run-timer`, `run-memory`,
   `run-pmm`, `run-heap`, `run-exception`, `run-mmu`, `run-mmu-fault`,
   `run-protection`, `run-protection-write`, `run-protection-exec`, `run-irq`,
-  `run-uart-irq`, `run-uart-overflow`, `run-sched`, and `clean`.
+  `run-uart-irq`, `run-uart-overflow`, `run-sched`, `run-blocking`, and
+  `clean`.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -690,6 +716,8 @@ This is a freestanding program rather than a hosted application:
   similarly keep UART-specific test paths out of the normal image.
 - `-DNIMERA_SCHED_TEST=0` keeps the normal shell path out of the isolated
   scheduler test; `make run-sched` enables it in `build-sched/`.
+- `-DNIMERA_BLOCKING_TEST=0` keeps the normal shell path out of the blocking
+  test; `make run-blocking` enables it in `build-blocking/`.
 - `-T linker.ld` supplies the complete memory layout and entry point.
 - `-m aarch64elf` selects LLD's AArch64 ELF emulation.
 - `-e _start` makes the assembly entry point explicit.

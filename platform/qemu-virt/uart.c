@@ -2,6 +2,8 @@
 // while RX is delivered by the UART IRQ into this fixed software queue.
 
 #include <nimera/irq.h>
+#include <nimera/panic.h>
+#include <nimera/scheduler.h>
 #include <nimera/types.h>
 
 typedef unsigned int u32;
@@ -72,6 +74,7 @@ void uart_putc(char c)
 char uart_getc(void)
 {
 	for (;;) {
+		u64 irq_state = irq_save_disable();
 		unsigned int tail = rx_tail;
 
 		if (tail != rx_head) {
@@ -79,11 +82,15 @@ char uart_getc(void)
 
 			compiler_memory_barrier();
 			rx_tail = (tail + 1U) % UART_RX_BUFFER_CAPACITY;
+			irq_restore(irq_state);
 			return value;
 		}
 
-		/* SEV in the IRQ handler wakes this WFE. If the IRQ happened just
-		 * before WFE, the event remains pending and WFE returns immediately. */
+		/* The check and WAITING transition are atomic against UART IRQs. */
+		scheduler_block_current();
+		irq_restore(irq_state);
+		/* WFE only parks an already WAITING thread; it is not the polling
+		 * mechanism. Timer IRQs switch away, and UART IRQs wake this thread. */
 		arch_wait_for_event();
 	}
 }
@@ -104,6 +111,7 @@ void uart_enable_rx_interrupt(void)
 void uart_handle_irq(void)
 {
 	u32 masked_status = *uart_register(UART_MIS);
+	unsigned int received = 0U;
 
 	if ((masked_status & (UART_INT_RX | UART_INT_RT)) == 0U) {
 		return;
@@ -111,9 +119,18 @@ void uart_handle_irq(void)
 	++rx_irq_count;
 	while ((*uart_register(UART_FR) & UART_FR_RXFE) == 0U) {
 		rx_push((unsigned char)(*uart_register(UART_DR) & 0xffU));
+		++received;
 	}
 	/* ICR acknowledges both sources after the FIFO has been drained. */
 	*uart_register(UART_ICR) = UART_INT_RX | UART_INT_RT;
+	if (received != 0U) {
+		scheduler_wake_console_input();
+		if (scheduler_console_waiting()) {
+			/* A received byte must not leave the sole console consumer
+			 * WAITING after the wakeup transition. */
+			panic("console wakeup invariant failed");
+		}
+	}
 	arch_signal_event();
 }
 

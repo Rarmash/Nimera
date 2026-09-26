@@ -5,7 +5,8 @@
 
 enum thread_state {
 	THREAD_RUNNING,
-	THREAD_READY
+	THREAD_READY,
+	THREAD_WAITING
 };
 
 struct irq_frame {
@@ -18,7 +19,7 @@ struct irq_frame {
 
 struct thread {
 	u64 id;
-	enum thread_state state;
+	volatile enum thread_state state;
 	struct irq_frame *frame;
 	u64 stack_base;
 	u64 stack_top;
@@ -29,10 +30,14 @@ struct thread {
 
 void scheduler_init(void);
 struct irq_frame *scheduler_schedule(struct irq_frame *current_frame);
+void scheduler_block_current(void);
+void scheduler_wake_console_input(void);
+int scheduler_console_waiting(void);
 unsigned int scheduler_thread_count(void);
 const struct thread *scheduler_thread(unsigned int index);
 u64 scheduler_context_switches(void);
 u64 scheduler_worker_counter(void);
+int scheduler_worker_saw_shell_waiting(void);
 int scheduler_stack_ok(void);
 void scheduler_test(void);
 __attribute__((noreturn)) void thread_entry_returned(void);

@@ -33,8 +33,6 @@ static void uart_irq_test(void)
 	console_write("\r\nUART INTID: ");
 	format_u64_decimal(info.uart_intid);
 	console_write("\r\n");
-	irq_init();
-	irq_enable();
 	console_write("RX IRQ enabled\r\nType 5 characters:\r\n");
 	for (index = 0U; index < 5U; ++index) {
 		received[index] = console_getc();
@@ -62,6 +60,34 @@ static void uart_ring_overflow_test(void)
 	console_write("Unread bytes preserved: yes\r\nDropped bytes: ");
 	format_u64_decimal(irq_uart_dropped_bytes());
 	console_write("\r\nUART ring overflow test complete.\r\n");
+}
+#endif
+
+#if NIMERA_BLOCKING_TEST
+static void blocking_test(void)
+{
+	u64 worker_before = scheduler_worker_counter();
+	u64 switches_before = scheduler_context_switches();
+	char received;
+
+	console_write("Nimera blocking test\r\n");
+	console_write("Shell state before wait: RUNNING\r\n");
+	console_write("Waiting for one character...\r\n");
+	received = console_getc();
+	console_write("Received: ");
+	console_putc(received);
+	console_write("\r\nShell wakeup: ");
+	console_write(scheduler_thread(0U)->state == THREAD_RUNNING ?
+		"OK\r\n" : "FAILED\r\n");
+	console_write("Worker progressed while shell slept: ");
+	console_write(scheduler_worker_counter() > worker_before &&
+		scheduler_worker_saw_shell_waiting() != 0 ? "yes\r\n" : "no\r\n");
+	if (scheduler_worker_counter() <= worker_before ||
+	    scheduler_context_switches() == switches_before ||
+	    scheduler_worker_saw_shell_waiting() == 0) {
+		panic("scheduler blocking test failed");
+	}
+	console_write("Blocking test complete.\r\n");
 }
 #endif
 
@@ -332,6 +358,11 @@ void kernel_main(void)
 
 #if NIMERA_SCHED_TEST
 	scheduler_test();
+	return;
+#endif
+
+#if NIMERA_BLOCKING_TEST
+	blocking_test();
 	return;
 #endif
 

@@ -13,6 +13,7 @@ static struct thread threads[MAX_THREADS];
 static unsigned int current_thread;
 static u64 context_switches;
 static volatile u64 worker_counter;
+static volatile u64 worker_saw_shell_waiting;
 static unsigned char worker_stack[WORKER_STACK_SIZE]
 	__attribute__((aligned(4096)));
 
@@ -21,6 +22,9 @@ static void worker_entry(void *argument)
 	(void)argument;
 	for (;;) {
 		++worker_counter;
+		if (threads[0].state == THREAD_WAITING) {
+			worker_saw_shell_waiting = 1ULL;
+		}
 	}
 }
 
@@ -62,6 +66,7 @@ void scheduler_init(void)
 	current_thread = 0U;
 	context_switches = 0ULL;
 	worker_counter = 0ULL;
+	worker_saw_shell_waiting = 0ULL;
 }
 
 static int valid_frame(const struct thread *thread, struct irq_frame *frame)
@@ -78,7 +83,8 @@ static int valid_frame(const struct thread *thread, struct irq_frame *frame)
 
 struct irq_frame *scheduler_schedule(struct irq_frame *current_frame)
 {
-	unsigned int next;
+	unsigned int offset;
+	unsigned int next = current_thread;
 	u64 irq_state = irq_save_disable();
 
 	if (current_thread >= MAX_THREADS || current_frame == (struct irq_frame *)0) {
@@ -86,10 +92,26 @@ struct irq_frame *scheduler_schedule(struct irq_frame *current_frame)
 		panic("invalid current scheduler thread");
 	}
 	threads[current_thread].frame = current_frame;
-	threads[current_thread].state = THREAD_READY;
-	next = (current_thread + 1U) % MAX_THREADS;
-	if (threads[next].state != THREAD_READY ||
-	    !valid_frame(&threads[next], threads[next].frame)) {
+	if (threads[current_thread].state == THREAD_RUNNING) {
+		threads[current_thread].state = THREAD_READY;
+	}
+	for (offset = 1U; offset <= MAX_THREADS; ++offset) {
+		unsigned int candidate = (current_thread + offset) % MAX_THREADS;
+
+		if (threads[candidate].state == THREAD_READY &&
+		    valid_frame(&threads[candidate], threads[candidate].frame)) {
+			next = candidate;
+			break;
+		}
+	}
+	if (next == current_thread &&
+	    threads[current_thread].state != THREAD_READY) {
+		/* No runnable thread exists. Keep the current frame as a safe idle
+		 * fallback; a UART or timer IRQ can make work runnable again. */
+		irq_restore(irq_state);
+		return current_frame;
+	}
+	if (next == current_thread && threads[current_thread].state == THREAD_READY) {
 		threads[current_thread].state = THREAD_RUNNING;
 		irq_restore(irq_state);
 		return current_frame;
@@ -101,6 +123,31 @@ struct irq_frame *scheduler_schedule(struct irq_frame *current_frame)
 	++context_switches;
 	irq_restore(irq_state);
 	return threads[current_thread].frame;
+}
+
+void scheduler_block_current(void)
+{
+	if (current_thread != 0U) {
+		panic("non-console thread attempted block");
+	}
+	/* The shell may be transiently READY when a UART IRQ woke it before
+	 * the interrupted instruction resumed. Re-enter WAITING atomically. */
+	threads[0].state = THREAD_WAITING;
+}
+
+void scheduler_wake_console_input(void)
+{
+	u64 irq_state = irq_save_disable();
+
+	if (threads[0].state == THREAD_WAITING) {
+		threads[0].state = current_thread == 0U ? THREAD_RUNNING : THREAD_READY;
+	}
+	irq_restore(irq_state);
+}
+
+int scheduler_console_waiting(void)
+{
+	return threads[0].state == THREAD_WAITING;
 }
 
 unsigned int scheduler_thread_count(void)
@@ -124,6 +171,11 @@ u64 scheduler_context_switches(void)
 u64 scheduler_worker_counter(void)
 {
 	return worker_counter;
+}
+
+int scheduler_worker_saw_shell_waiting(void)
+{
+	return worker_saw_shell_waiting != 0ULL;
 }
 
 int scheduler_stack_ok(void)

@@ -59,7 +59,8 @@ static void shell_threads(void)
 		console_write(" ");
 		console_write(thread->name);
 		console_write(" ");
-		console_write(thread->state == THREAD_RUNNING ? "RUNNING" : "READY");
+		console_write(thread->state == THREAD_RUNNING ? "RUNNING" :
+			thread->state == THREAD_WAITING ? "WAITING" : "READY");
 		console_write(" switches=");
 		format_u64_decimal(thread->switch_count);
 		console_write("\r\n");
