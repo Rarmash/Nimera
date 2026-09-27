@@ -522,18 +522,23 @@ window and also checks that block and GPU VirtIO devices coexist.
 ## Framebuffer terminal
 
 `make run-fb-terminal` selects a framebuffer terminal backend for the existing
-logical terminal API. The backend keeps a character-cell grid, renders a small
-bitmap font into a kernel-owned terminal surface, and asks the compositor to
-flush changed regions. At the current `1280x800` mode the grid is `160x50` using
-`8x16` cells; the dimensions are derived from the display and font metrics,
-not hardcoded terminal geometry.
+logical terminal API. The backend keeps a character-cell grid, renders the
+Nimera Mono bitmap font into a kernel-owned terminal surface, and asks the
+compositor to flush changed regions. The font uses 8x16 pixel glyphs with a
+9-pixel horizontal advance. At the current `1280x800` mode the normal display
+grid is `142x50`; the window-manager client remains about 132 columns wide.
+The dimensions are derived from the display and font metrics, not hardcoded
+terminal geometry.
 
 Framebuffer output accepts UTF-8 byte streams even when one codepoint is split
 across separate writes. The decoder validates sequence length, continuation
 bytes, overlong encodings, UTF-16 surrogates, and the Unicode range; malformed
 input becomes U+FFFD. Nimera Mono is intentionally a small bitmap font, not a
 full shaping or international-text engine: normalization, combining marks,
-bidirectional layout, and locale handling are not part of this milestone.
+bidirectional layout, and locale handling are not part of this milestone. Its
+readability cut uses hand-designed 8x8 glyph shapes rendered to 8x16 pixels,
+with distinct lowercase, heavier stems, fuller curves, and Latin-shaped
+Cyrillic fallback glyphs. A visual specimen is included in `make run-graphics`.
 
 The ordinary `make run` path remains the ANSI/PL011 backend. In framebuffer
 mode, shell and EL0 application output uses the same terminal API and ABI as
@@ -568,9 +573,28 @@ The compositor fills a solid background, composites visible surfaces in z-order,
 draws the mouse pointer last, and merges updates into one clipped dirty
 bounding rectangle before flushing it.
 
-This is deliberately not a window system: there is no userspace surface API,
-window manager, alpha blending, focus, hit testing, or GUI IPC yet. All surface
-ownership remains in the kernel.
+This is deliberately not a userspace window system: all surface ownership
+remains in the kernel. The separate `make run-windows` target adds the first
+small kernel-owned window manager described below; it does not add a userspace
+GUI API or GUI IPC.
+
+## First kernel window manager
+
+`make run-windows` builds a framebuffer-terminal development mode with a small
+fixed window table. A window is a rectangle with its own frame and client
+surface, title, visibility/focus state, and z-order. The window manager draws a
+solid desktop, a decorated terminal window, and a small kernel-owned About
+window. The terminal renderer targets the terminal window's client surface, so
+its geometry is derived from that client area rather than from the full display.
+
+Pointer input supports hit testing, click-to-focus, title-bar dragging, and
+simple bounds clamping. Keyboard input is delivered to the terminal only while
+that window is focused. The window table is kernel-only and fixed-size; there
+are no controls, resizing, shadows, widgets, application window protocol, or
+general GUI event API yet. The target also runs an isolated geometry, z-order,
+hit-testing, focus, drag, restore, and destruction self-test before entering
+the shell. The About window is initially focused, so click the terminal window
+before typing into it.
 
 `make run-native-input-test` runs the isolated keyboard model/discovery test.
 It checks the VirtIO-MMIO keyboard, fixed event queue, printable/Shift/Ctrl
@@ -1281,6 +1305,9 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   backing buffers and lifetime management.
 - `kernel/compositor.c` and `include/nimera/compositor.h` — clipped opaque
   composition, dirty-region tracking, background, and pointer overlay.
+- `kernel/window.c` and `include/nimera/window.h` — fixed kernel-owned window
+  table, decorated frame/client surfaces, focus, z-order, hit testing, and
+  title-bar dragging for the `run-windows` development target.
 - `kernel/graphics.c` — bounds-safe software drawing primitives, Nimera Mono
   rendering, and selectable surface/display drawing targets.
 - `include/nimera/utf8.h` — minimal streaming UTF-8 decoder API.
@@ -1372,7 +1399,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `disk-create`,
   `disk-reset`, `run-terminal-app-format`, `run-terminal-app`,
   `run-terminal-fault`, `run-user-terminal`, `run-graphics`,
-  `run-fb-terminal`, `run-fb-terminal-test`, `run-compositor`, `run-utf8-test`, and `clean`. Test builds use
+  `run-fb-terminal`, `run-fb-terminal-test`, `run-compositor`, `run-windows`,
+  `run-utf8-test`, and `clean`. Test builds use
   separate directories so their compile-time paths cannot contaminate `make
   run`; `run-jobs` uses `build-jobs/` for the background-job test.
 - `README.md` — project status, workflow, and design notes.

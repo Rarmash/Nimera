@@ -6,6 +6,7 @@
 #include <nimera/terminal.h>
 #include <nimera/terminal_fb.h>
 #include <nimera/timer.h>
+#include <nimera/window.h>
 
 #define TERMINAL_ESCAPE_TIMEOUT_MS 1000ULL
 #define TERMINAL_GEOMETRY_TIMEOUT_MS 300ULL
@@ -369,8 +370,18 @@ struct key_event terminal_read_key(void)
 	if (terminal_framebuffer_active() != 0 && input_hardware_available() != 0) {
 		for (;;) {
 			while (input_try_get_pointer_event(&pointer) != 0)
+#if NIMERA_WINDOW_TEST
+				window_manager_handle_pointer_event(&pointer);
+#else
 				compositor_handle_pointer_event(&pointer);
-			if (input_try_get_event(&event) != 0) return event;
+#endif
+			if (input_try_get_event(&event) != 0) {
+#if NIMERA_WINDOW_TEST
+				if (window_manager_terminal_focused() != 0) return event;
+#else
+				return event;
+#endif
+			}
 			input_wait_for_activity();
 		}
 	}
