@@ -1385,6 +1385,21 @@ irq_enable();
 	}
 #endif
 
+#if NIMERA_GUI_RUNTIME_TEST
+	{
+		enum elf_result elf_result;
+		terminal_init();
+		elf_result = elf_load_user(vfs_root(), "/apps/guitest",
+			(const struct elf_argument *)0, 0U);
+		if (elf_result != ELF_OK) panic(elf_error_string(elf_result));
+		console_write("Nimera GUI runtime test: entering /apps/guitest\r\n");
+		scheduler_block_current();
+		while (elf_user_task_active() != 0) arch_wait_for_event();
+		elf_user_task_finished();
+		return;
+	}
+#endif
+
 #if NIMERA_USER_GUI_TEST
 	{
 		enum elf_result elf_result;

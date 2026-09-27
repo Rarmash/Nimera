@@ -124,6 +124,35 @@ There is no `fork`, `exec`, relocations, PIE, shared libraries, or background
 shell job control. The current loader image limit is 64 KiB and the current test
 program demonstrates both console output and zero-initialized BSS.
 
+## First userspace GUI runtime
+
+The window ABI is intentionally still a small kernel boundary: it provides a
+window handle, shared client pixels, events, resize mapping updates, and
+`present`. It does not know about widgets, layout, colors, or application
+state. The first reusable userspace layer now lives in `user/runtime/gui/` and
+builds without libc or kernel symbol calls.
+
+The runtime provides a bounds-checked Canvas/Painter API, clipped rectangles,
+Nimera Mono-compatible text rendering, a small UTF-8 decoder with Cyrillic
+NCS-1 transliteration and a replacement glyph, text metrics, Labels, Buttons,
+and a unioned damage rectangle. A window wrapper consumes `RESIZED` events and
+replaces its pixel pointer, dimensions, and stride before the application draws
+again. Widgets remain ordinary C data and application-managed layout; there
+is no kernel widget support, libc, or generic layout engine.
+
+`/apps/guidemo` is the first real runtime user. Run it from the shell with
+`guidemo`: it displays a closable/resizable window containing a counter and
+`Increment`/`Reset` buttons. Pointer move, press, release, resize, close, and
+`Q`/Escape exercise the path from raw window events through widget state to a
+redraw/present transaction. `/apps/guihello` remains the minimal raw window
+ABI example.
+
+For the non-visual checks, use `make run-gui-runtime`. A fresh image needs to
+be formatted once with `make run-gui-runtime-format`; stop QEMU after the
+format report and then run the runtime target. The test reports canvas bounds,
+UTF-8 drawing, button state/click cancellation, damage accumulation, resize
+mapping refresh, and close handling.
+
 ## Boot flow
 
 `make run` starts QEMU with the `virt` machine and loads
@@ -1379,10 +1408,14 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   set; it contains no VirtIO register knowledge.
 - `kernel/nimfs.c` — the small versioned whole-disk filesystem and VFS backend;
   it contains no VirtIO queue knowledge.
-- `user/runtime/` — the tiny freestanding user entry point and syscall stubs.
+- `user/runtime/` — the tiny freestanding user entry point, syscall stubs,
+  filesystem helpers, and reusable GUI runtime.
+- `user/runtime/gui/` — the userspace Canvas/Painter, font-compatible UTF-8
+  text renderer, geometry/damage helpers, Label/Button primitives, and window
+  wrapper; it has no kernel GUI implementation dependencies.
 - `user/apps/` — separately linked `hello`, `cat`, file-syscall, `keytest`,
   `termcheck`, userspace `edit`, filesystem utility ELF programs, and the
-  `guihello` shared-framebuffer demo; artifacts are kept outside the source
+  `guihello` and `guidemo` shared-framebuffer demos; artifacts are kept outside the source
   tree in `build-user-app/`.
 - `user/apps/edit/` — the standalone NimEdit model and renderer. It includes
   only the public userspace ABI and no kernel headers.
@@ -1456,7 +1489,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `disk-reset`, `run-terminal-app-format`, `run-terminal-app`,
   `run-terminal-fault`, `run-user-terminal`, `run-graphics`,
   `run-fb-terminal`, `run-fb-terminal-test`, `run-compositor`, `run-windows`,
-  `run-user-gui-format`, `run-user-gui`, `run-window-close`, `run-font`, `run-utf8-test`, and `clean`. Test builds use
+  `run-user-gui-format`, `run-user-gui`, `run-gui-runtime-format`, `run-gui-runtime`, `run-window-close`, `run-font`, `run-utf8-test`, and `clean`. Test builds use
   separate directories so their compile-time paths cannot contaminate `make
   run`; `run-jobs` uses `build-jobs/` for the background-job test.
 - `README.md` — project status, workflow, and design notes.
