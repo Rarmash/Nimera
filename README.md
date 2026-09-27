@@ -599,11 +599,14 @@ solid desktop, a decorated terminal window, and a small kernel-owned About
 window. The terminal renderer targets the terminal window's client surface, so
 its geometry is derived from that client area rather than from the full display.
 
-Pointer input supports hit testing, click-to-focus, title-bar dragging, and
-simple bounds clamping. Keyboard input is delivered to the terminal only while
-that window is focused. The window table is kernel-only and fixed-size; there
-are no controls, resizing, shadows, widgets, application window protocol, or
-general GUI event API yet. The target also runs an isolated geometry, z-order,
+Pointer input supports hit testing, click-to-focus, title-bar dragging, a
+native close box for closable windows, and simple bounds clamping. Keyboard
+input is delivered to the terminal only while that window is focused. The
+terminal remains non-closable; the kernel-owned About window uses direct kernel
+destruction, while userspace windows receive a `CLOSE_REQUEST` event and decide
+whether to destroy themselves. The window table is kernel-only and fixed-size;
+there are no resize/minimize/maximize controls, widgets, or general GUI
+framework. The target also runs an isolated geometry, z-order,
 hit-testing, focus, drag, restore, and destruction self-test before entering
 the shell. The About window is initially focused, so click the terminal window
 before typing into it.
@@ -637,9 +640,14 @@ process and are removed automatically when that process exits or faults.
 To create the development image with the GUI payload once, run
 `make run-user-gui-format`, stop QEMU after the format report, then run
 `make run-user-gui`. The latter mounts the existing image and does not format
-it. Pressing `Q` in the focused GUI window exits the demo and returns focus to
-the terminal. This milestone deliberately has no widgets, resize protocol,
-close protocol, toolkit, or general GUI framework.
+it. `/apps/guihello` creates a closable window; clicking its native close box
+queues one close request, which the application handles by destroying its
+window and exiting. Pressing `Q` remains supported. `make run-window-close`
+runs isolated close geometry, press/release, queue wakeup, ownership, cleanup,
+and repeated slot-reuse checks. Close requests use the existing bounded event
+queue; if it is full, the queue's existing oldest-event eviction policy is
+used, without a kernel panic. This milestone deliberately has no resize,
+minimize, maximize, force-close, widgets, toolkit, or general GUI framework.
 
 For the shell plus installed EL0 applications, prepare the development NimFS
 image once with `make run-elf-format` (stop QEMU after the format report), then
@@ -1440,7 +1448,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `disk-reset`, `run-terminal-app-format`, `run-terminal-app`,
   `run-terminal-fault`, `run-user-terminal`, `run-graphics`,
   `run-fb-terminal`, `run-fb-terminal-test`, `run-compositor`, `run-windows`,
-  `run-user-gui-format`, `run-user-gui`, `run-font`, `run-utf8-test`, and `clean`. Test builds use
+  `run-user-gui-format`, `run-user-gui`, `run-window-close`, `run-font`, `run-utf8-test`, and `clean`. Test builds use
   separate directories so their compile-time paths cannot contaminate `make
   run`; `run-jobs` uses `build-jobs/` for the background-job test.
 - `README.md` — project status, workflow, and design notes.

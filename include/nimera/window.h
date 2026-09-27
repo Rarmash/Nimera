@@ -14,9 +14,14 @@ struct process;
 #define WINDOW_USER_MAP_BASE 0x14000000ULL
 #define WINDOW_USER_MAP_STRIDE 0x00400000ULL
 #define WINDOW_EVENT_QUEUE_CAPACITY 32U
+#define WINDOW_CLOSE_BOX_SIZE 14ULL
+#define WINDOW_CLOSE_BOX_Y 7ULL
+#define WINDOW_CLOSE_BOX_MARGIN 7ULL
 
 enum window_hit_region {
 	WINDOW_HIT_OUTSIDE,
+	WINDOW_HIT_BORDER,
+	WINDOW_HIT_CLOSE,
 	WINDOW_HIT_TITLE,
 	WINDOW_HIT_CLIENT
 };
@@ -40,11 +45,13 @@ struct nimera_window {
 	unsigned int event_read;
 	unsigned int event_write;
 	unsigned int user_owned;
+	u32 flags;
+	unsigned int close_pressed;
 };
 
 int window_manager_init(void);
 struct nimera_window *window_create(const char *title, u64 width, u64 height,
-					long long x, long long y);
+					long long x, long long y, u32 flags);
 void window_destroy(struct nimera_window *window);
 void window_show(struct nimera_window *window, unsigned int visible);
 void window_focus(struct nimera_window *window);
@@ -54,7 +61,7 @@ enum window_hit_region window_hit_test(const struct nimera_window *window,
 					       unsigned int x, unsigned int y);
 void window_manager_handle_pointer_event(const struct pointer_event *event);
 int window_manager_create_user(struct process *owner, const char *title,
-				       u64 width, u64 height,
+				       u64 width, u64 height, u32 flags,
 				       struct nimera_window_info *info);
 int window_manager_destroy_user(struct process *owner, u64 handle);
 int window_manager_present_user(struct process *owner, u64 handle,

@@ -71,7 +71,10 @@ static long long syscall_window_create(struct irq_frame *frame)
 	if (length != 0ULL && copy_from_user(title, frame->x[2], length) != 0)
 		return NIMERA_NERR_INVALID;
 	title[length] = '\0';
-	if (window_manager_create_user(process_current(), title, frame->x[0], frame->x[1], &info) != 0)
+	if ((frame->x[5] & ~(u64)NIMERA_WINDOW_CLOSABLE) != 0ULL)
+		return NIMERA_NERR_INVALID;
+	if (window_manager_create_user(process_current(), title, frame->x[0], frame->x[1],
+		(u32)frame->x[5], &info) != 0)
 		return NIMERA_NERR_NO_MEMORY;
 	if (copy_to_user(frame->x[4], (const char *)(const void *)&info, sizeof(info)) != 0) {
 		(void)window_manager_destroy_user(process_current(), info.handle);

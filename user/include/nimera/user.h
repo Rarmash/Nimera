@@ -25,8 +25,8 @@ int nimera_terminal_cursor_visible(int visible);
 int nimera_terminal_begin_update(void);
 int nimera_terminal_end_update(void);
 long long nimera_window_create(unsigned int width, unsigned int height,
-	const char *title, unsigned long long title_length,
-	struct nimera_window_info *info);
+			const char *title, unsigned long long title_length,
+			unsigned int flags, struct nimera_window_info *info);
 int nimera_window_destroy(unsigned long long handle);
 int nimera_window_present(unsigned long long handle, unsigned long long x,
 	unsigned long long y, unsigned long long width, unsigned long long height);

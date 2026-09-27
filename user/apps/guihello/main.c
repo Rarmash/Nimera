@@ -75,7 +75,8 @@ int main(int argc, char **argv)
 	long long handle;
 	u32 *pixels;
 	(void)argc; (void)argv;
-	handle = nimera_window_create(480U, 300U, "Hello from EL0", 14ULL, &window);
+	handle = nimera_window_create(480U, 300U, "Hello from EL0", 14ULL,
+		NIMERA_WINDOW_CLOSABLE, &window);
 	if (handle < 0LL) {
 		const char message[] = "guihello: create failed\n";
 		(void)nimera_write_console(message, sizeof(message) - 1ULL);
@@ -102,6 +103,7 @@ int main(int argc, char **argv)
 			(void)nimera_write_console(message, sizeof(message) - 1ULL);
 			break;
 		}
+		if (event.type == NIMERA_WINDOW_EVENT_CLOSE_REQUEST) break;
 		if (event.type == NIMERA_WINDOW_KEY &&
 			(event.ch == (u32)'q' || event.ch == (u32)'Q')) break;
 		if (event.type == NIMERA_WINDOW_POINTER_BUTTON_DOWN) {
