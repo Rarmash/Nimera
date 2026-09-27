@@ -1,4 +1,5 @@
 #include <nimera/console.h>
+#include <nimera/compositor.h>
 #include <nimera/display.h>
 #include <nimera/format.h>
 #include <nimera/irq.h>
@@ -368,7 +369,7 @@ struct key_event terminal_read_key(void)
 	if (terminal_framebuffer_active() != 0 && input_hardware_available() != 0) {
 		for (;;) {
 			while (input_try_get_pointer_event(&pointer) != 0)
-				terminal_fb_handle_pointer_event(&pointer);
+				compositor_handle_pointer_event(&pointer);
 			if (input_try_get_event(&event) != 0) return event;
 			input_wait_for_activity();
 		}

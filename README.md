@@ -523,8 +523,8 @@ window and also checks that block and GPU VirtIO devices coexist.
 
 `make run-fb-terminal` selects a framebuffer terminal backend for the existing
 logical terminal API. The backend keeps a character-cell grid, renders a small
-bitmap font into the VirtIO-GPU framebuffer, flushes changed cells, and draws a
-software cursor. At the current `1280x800` mode the grid is `160x50` using
+bitmap font into a kernel-owned terminal surface, and asks the compositor to
+flush changed regions. At the current `1280x800` mode the grid is `160x50` using
 `8x16` cells; the dimensions are derived from the display and font metrics,
 not hardcoded terminal geometry.
 
@@ -541,14 +541,36 @@ before. `make run-fb-terminal` also adds QEMU `virtio-keyboard-device` and
 `virtio-tablet-device`: keyboard IRQs are translated into the existing
 hardware-independent logical key events, while the tablet has its own bounded
 pointer-event queue. Its advertised ABS_X/ABS_Y ranges are scaled and clamped
-to framebuffer pixels, and the framebuffer terminal draws a small software
-cursor over its cell grid. Pointer button events are decoded but are not yet
-used by the shell or terminal. The current keyboard translation uses a fixed
+to framebuffer pixels. The compositor owns a small mouse-pointer overlay and
+draws it above the terminal surface; the text cursor remains part of the
+terminal surface. Pointer button events are decoded but are not yet used by
+the shell or terminal. The current keyboard translation uses a fixed
 US layout and supports the shell/editor keys, Shift, and Ctrl-S/Ctrl-Q. UART
 remains the debug and panic/rescue console; if the optional keyboard is absent,
 the framebuffer path falls back to UART input. This is pointer input and
-software cursor support, not a GUI, compositor, window manager, or userspace
-input-device API.
+software pointer support, not a GUI, window manager, or userspace input-device
+API.
+
+## Kernel surfaces and compositor
+
+The compositor milestone inserts a small kernel-only composition layer between
+drawing code and the physical display:
+
+```text
+terminal renderer -> terminal surface -> compositor -> display framebuffer
+```
+
+A surface owns a software pixel buffer, position, visibility flag, and integer
+z-order. The current terminal surface covers the display; `make run-compositor`
+adds a colored kernel-owned overlay, moves it, and checks that the old area is
+restored. Surfaces are opaque and all use the display's single B8G8R8X8 format.
+The compositor fills a solid background, composites visible surfaces in z-order,
+draws the mouse pointer last, and merges updates into one clipped dirty
+bounding rectangle before flushing it.
+
+This is deliberately not a window system: there is no userspace surface API,
+window manager, alpha blending, focus, hit testing, or GUI IPC yet. All surface
+ownership remains in the kernel.
 
 `make run-native-input-test` runs the isolated keyboard model/discovery test.
 It checks the VirtIO-MMIO keyboard, fixed event queue, printable/Shift/Ctrl
@@ -1255,12 +1277,16 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   implementation.
 - `kernel/display.c` — minimal platform-independent framebuffer/display state
   and rectangular flush API.
+- `kernel/surface.c` and `include/nimera/surface.h` — kernel-owned surface
+  backing buffers and lifetime management.
+- `kernel/compositor.c` and `include/nimera/compositor.h` — clipped opaque
+  composition, dirty-region tracking, background, and pointer overlay.
 - `kernel/graphics.c` — bounds-safe software drawing primitives, Nimera Mono
-  codepoint rendering, and the first graphics test pattern.
+  rendering, and selectable surface/display drawing targets.
 - `include/nimera/utf8.h` — minimal streaming UTF-8 decoder API.
 - `kernel/utf8.c` — freestanding UTF-8 validation and self-test.
-- `kernel/terminal_fb.c` — framebuffer terminal cell grid, cursor overlay,
-  scrolling, and cell-sized display flushes.
+- `kernel/terminal_fb.c` — framebuffer terminal cell grid, text cursor,
+  scrolling, and terminal-surface rendering.
 - `kernel/input.c` — bounded hardware-independent logical key-event queue and
   blocking input handoff.
 - `include/nimera/input.h` — common key-event types and input queue API.
@@ -1346,7 +1372,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `disk-create`,
   `disk-reset`, `run-terminal-app-format`, `run-terminal-app`,
   `run-terminal-fault`, `run-user-terminal`, `run-graphics`,
-  `run-fb-terminal`, `run-fb-terminal-test`, `run-utf8-test`, and `clean`. Test builds use
+  `run-fb-terminal`, `run-fb-terminal-test`, `run-compositor`, `run-utf8-test`, and `clean`. Test builds use
   separate directories so their compile-time paths cannot contaminate `make
   run`; `run-jobs` uses `build-jobs/` for the background-job test.
 - `README.md` — project status, workflow, and design notes.

@@ -1,6 +1,7 @@
 // No libc, allocator, or runtime are needed for this milestone.
 
 #include <nimera/console.h>
+#include <nimera/compositor.h>
 #include <nimera/graphics.h>
 #include <nimera/block.h>
 #include <nimera/editor.h>
@@ -1155,6 +1156,11 @@ void kernel_main(void)
 	block_init();
 	(void)virtio_block_init();
 	(void)virtio_gpu_init();
+
+#if NIMERA_COMPOSITOR_TEST
+	(void)compositor_test();
+	return;
+#endif
 
 #if NIMERA_GRAPHICS_TEST
 	graphics_test();

@@ -1,4 +1,4 @@
-#include <nimera/display.h>
+#include <nimera/compositor.h>
 #include <nimera/graphics.h>
 #include <nimera/heap.h>
 #include <nimera/terminal_fb.h>
@@ -21,9 +21,6 @@ static unsigned int cursor_row;
 static unsigned int cursor_column;
 static unsigned int cursor_visible;
 static unsigned int active;
-static unsigned int pointer_x;
-static unsigned int pointer_y;
-static unsigned int pointer_visible;
 static struct utf8_decoder decoder;
 
 static struct terminal_fb_cell *fb_cell(unsigned int row, unsigned int column)
@@ -35,13 +32,18 @@ static struct terminal_fb_cell *fb_cell(unsigned int row, unsigned int column)
 
 static void fb_flush_cell(unsigned int row, unsigned int column)
 {
+	struct nimera_surface *surface = compositor_terminal_surface();
+	if (surface == (struct nimera_surface *)0) return;
+	compositor_render_begin(surface);
 	graphics_draw_codepoint((u64)column * graphics_cell_width(),
 			   (u64)row * graphics_cell_height(),
 			   fb_cell(row, column)->codepoint,
 			   FB_TERMINAL_FOREGROUND, FB_TERMINAL_BACKGROUND);
-	display_flush((u64)column * graphics_cell_width(),
-		      (u64)row * graphics_cell_height(),
-		      graphics_cell_width(), graphics_cell_height());
+	compositor_render_end();
+	compositor_mark_dirty((long long)column * graphics_cell_width(),
+				      (long long)row * graphics_cell_height(),
+				      graphics_cell_width(), graphics_cell_height());
+	compositor_present();
 }
 
 static void fb_flush_cursor_cell(unsigned int row, unsigned int column,
@@ -51,13 +53,20 @@ static void fb_flush_cursor_cell(unsigned int row, unsigned int column,
 		fb_flush_cell(row, column);
 		return;
 	}
+	{
+		struct nimera_surface *surface = compositor_terminal_surface();
+		if (surface == (struct nimera_surface *)0) return;
+		compositor_render_begin(surface);
 	graphics_draw_codepoint((u64)column * graphics_cell_width(),
 			   (u64)row * graphics_cell_height(),
 			   fb_cell(row, column)->codepoint,
 			   FB_TERMINAL_BACKGROUND, FB_TERMINAL_CURSOR);
-	display_flush((u64)column * graphics_cell_width(),
-		      (u64)row * graphics_cell_height(),
-		      graphics_cell_width(), graphics_cell_height());
+		compositor_render_end();
+	}
+	compositor_mark_dirty((long long)column * graphics_cell_width(),
+				      (long long)row * graphics_cell_height(),
+				      graphics_cell_width(), graphics_cell_height());
+	compositor_present();
 }
 
 static void fb_hide_cursor_at(unsigned int row, unsigned int column)
@@ -72,36 +81,6 @@ static void fb_show_cursor_at(unsigned int row, unsigned int column)
 		fb_flush_cursor_cell(row, column, 1U);
 }
 
-static void fb_redraw_cell(unsigned int row, unsigned int column)
-{
-	if (cursor_visible != 0U && row == cursor_row && column == cursor_column)
-		fb_flush_cursor_cell(row, column, 1U);
-	else
-		fb_flush_cell(row, column);
-}
-
-static void fb_draw_pointer(void)
-{
-	/* A small cross is an overlay; terminal cells remain the backing image. */
-	graphics_fill_rect(pointer_x, pointer_y, 2ULL, 12ULL, FB_TERMINAL_CURSOR);
-	graphics_fill_rect(pointer_x, pointer_y, 12ULL, 2ULL, FB_TERMINAL_CURSOR);
-	display_flush(pointer_x, pointer_y, 12ULL, 12ULL);
-}
-
-static void fb_redraw_pointer_area(unsigned int x, unsigned int y)
-{
-	unsigned int first_row = y / graphics_cell_height();
-	unsigned int first_column = x / graphics_cell_width();
-	unsigned int last_row = (y + 11U) / graphics_cell_height();
-	unsigned int last_column = (x + 11U) / graphics_cell_width();
-
-	if (last_row >= rows) last_row = rows - 1U;
-	if (last_column >= columns) last_column = columns - 1U;
-	for (unsigned int row = first_row; row <= last_row; ++row)
-		for (unsigned int column = first_column; column <= last_column; ++column)
-			fb_redraw_cell(row, column);
-}
-
 static void fb_scroll(void)
 {
 	for (unsigned int row = 1U; row < rows; ++row)
@@ -109,6 +88,7 @@ static void fb_scroll(void)
 			*fb_cell(row - 1U, column) = *fb_cell(row, column);
 	for (unsigned int column = 0U; column < columns; ++column)
 		fb_cell(rows - 1U, column)->codepoint = ' ';
+	compositor_render_begin(compositor_terminal_surface());
 	graphics_clear(FB_TERMINAL_BACKGROUND);
 	for (unsigned int row = 0U; row < rows; ++row)
 		for (unsigned int column = 0U; column < columns; ++column)
@@ -117,7 +97,11 @@ static void fb_scroll(void)
 					   fb_cell(row, column)->codepoint,
 					   FB_TERMINAL_FOREGROUND,
 					   FB_TERMINAL_BACKGROUND);
-	display_flush(0ULL, 0ULL, display_width(), display_height());
+	compositor_render_end();
+	compositor_mark_dirty(0LL, 0LL,
+			      compositor_terminal_surface()->width,
+			      compositor_terminal_surface()->height);
+	compositor_present();
 }
 
 static void fb_newline(void)
@@ -132,9 +116,9 @@ static void fb_newline(void)
 int terminal_fb_init(void)
 {
 	u64 count;
-	if (!display_available()) return -1;
-	columns = (unsigned int)(display_width() / graphics_cell_width());
-	rows = (unsigned int)(display_height() / graphics_cell_height());
+	if (compositor_init() != 0) return -1;
+	columns = (unsigned int)(compositor_terminal_surface()->width / graphics_cell_width());
+	rows = (unsigned int)(compositor_terminal_surface()->height / graphics_cell_height());
 	if (columns == 0U || rows == 0U) return -1;
 	count = (u64)rows * columns;
 	if ((count + FB_CELL_CHUNK_CAPACITY - 1ULL) /
@@ -156,14 +140,15 @@ int terminal_fb_init(void)
 	cursor_row = 0U;
 	cursor_column = 0U;
 	cursor_visible = 1U;
-	pointer_x = (unsigned int)(display_width() / 2ULL);
-	pointer_y = (unsigned int)(display_height() / 2ULL);
-	pointer_visible = 1U;
 	active = 1U;
+	compositor_render_begin(compositor_terminal_surface());
 	graphics_clear(FB_TERMINAL_BACKGROUND);
-	display_flush(0ULL, 0ULL, display_width(), display_height());
+	compositor_render_end();
+	compositor_mark_dirty(0LL, 0LL,
+			      compositor_terminal_surface()->width,
+			      compositor_terminal_surface()->height);
+	compositor_present();
 	fb_show_cursor_at(cursor_row, cursor_column);
-	fb_draw_pointer();
 	return 0;
 }
 
@@ -215,8 +200,13 @@ void terminal_fb_clear(void)
 			fb_cell(row, column)->codepoint = ' ';
 	cursor_row = 0U;
 	cursor_column = 0U;
+	compositor_render_begin(compositor_terminal_surface());
 	graphics_clear(FB_TERMINAL_BACKGROUND);
-	display_flush(0ULL, 0ULL, display_width(), display_height());
+	compositor_render_end();
+	compositor_mark_dirty(0LL, 0LL,
+			      compositor_terminal_surface()->width,
+			      compositor_terminal_surface()->height);
+	compositor_present();
 	fb_show_cursor_at(cursor_row, cursor_column);
 }
 
@@ -250,26 +240,6 @@ void terminal_fb_show_cursor(void)
 {
 	cursor_visible = 1U;
 	fb_show_cursor_at(cursor_row, cursor_column);
-}
-
-void terminal_fb_handle_pointer_event(const struct pointer_event *event)
-{
-	unsigned int old_x;
-	unsigned int old_y;
-
-	if (active == 0U || event == (const struct pointer_event *)0) return;
-	if (event->kind == POINTER_MOVE) {
-		old_x = pointer_x;
-		old_y = pointer_y;
-		pointer_x = event->x < display_width() ? event->x :
-			(unsigned int)(display_width() - 1ULL);
-		pointer_y = event->y < display_height() ? event->y :
-			(unsigned int)(display_height() - 1ULL);
-		if (pointer_visible == 0U || (old_x == pointer_x && old_y == pointer_y))
-			return;
-		fb_redraw_pointer_area(old_x, old_y);
-		fb_draw_pointer();
-	}
 }
 
 unsigned int terminal_fb_rows(void) { return rows; }

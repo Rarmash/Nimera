@@ -2,7 +2,6 @@
 #define NIMERA_TERMINAL_FB_H
 
 #include <nimera/types.h>
-#include <nimera/input.h>
 
 int terminal_fb_init(void);
 void terminal_fb_putc(char character);
@@ -15,6 +14,5 @@ void terminal_fb_show_cursor(void);
 unsigned int terminal_fb_rows(void);
 unsigned int terminal_fb_columns(void);
 int terminal_fb_self_test(void);
-void terminal_fb_handle_pointer_event(const struct pointer_event *event);
 
 #endif

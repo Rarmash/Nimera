@@ -6,6 +6,8 @@
 void graphics_put_pixel(u64 x, u64 y, u32 color);
 void graphics_fill_rect(u64 x, u64 y, u64 width, u64 height, u32 color);
 void graphics_clear(u32 color);
+void graphics_set_target(u32 *pixels, u64 width, u64 height, u64 stride);
+void graphics_reset_target(void);
 unsigned int graphics_glyph_width(void);
 unsigned int graphics_glyph_height(void);
 unsigned int graphics_cell_width(void);

@@ -48,6 +48,35 @@ static const unsigned char glyph_question[5] = {0x02, 0x01, 0x15, 0x02, 0x00};
 
 static const unsigned char glyph_replacement[5] = {0x1f, 0x11, 0x15, 0x11, 0x1f};
 
+static u32 *graphics_target_pixels;
+static u64 graphics_target_width;
+static u64 graphics_target_height;
+static u64 graphics_target_stride;
+
+static u32 *graphics_pixels(void)
+{
+	return graphics_target_pixels != (u32 *)0 ? graphics_target_pixels :
+		display_framebuffer();
+}
+
+static u64 graphics_width(void)
+{
+	return graphics_target_pixels != (u32 *)0 ? graphics_target_width :
+		display_width();
+}
+
+static u64 graphics_height(void)
+{
+	return graphics_target_pixels != (u32 *)0 ? graphics_target_height :
+		display_height();
+}
+
+static u64 graphics_stride(void)
+{
+	return graphics_target_pixels != (u32 *)0 ? graphics_target_stride :
+		display_pitch() / 4ULL;
+}
+
 static u32 graphics_cyrillic_ascii(u32 codepoint)
 {
 	/* The first Nimera Mono cut covers the common Cyrillic letters used by
@@ -85,21 +114,39 @@ static const unsigned char *graphics_glyph(u32 codepoint)
 
 void graphics_put_pixel(u64 x, u64 y, u32 color)
 {
-	if (!display_available() || x >= display_width() || y >= display_height()) return;
-	display_framebuffer()[y * (display_pitch() / 4ULL) + x] = color;
+	if (!display_available() || graphics_pixels() == (u32 *)0 ||
+		x >= graphics_width() || y >= graphics_height()) return;
+	graphics_pixels()[y * graphics_stride() + x] = color;
 }
 
 void graphics_fill_rect(u64 x, u64 y, u64 w, u64 h, u32 color)
 {
-	if (!display_available() || x >= display_width() || y >= display_height()) return;
-	if (w > display_width() - x) w = display_width() - x;
-	if (h > display_height() - y) h = display_height() - y;
+	if (!display_available() || graphics_pixels() == (u32 *)0 ||
+		x >= graphics_width() || y >= graphics_height()) return;
+	if (w > graphics_width() - x) w = graphics_width() - x;
+	if (h > graphics_height() - y) h = graphics_height() - y;
 	for (u64 row = 0; row < h; ++row)
 		for (u64 column = 0; column < w; ++column)
 			graphics_put_pixel(x + column, y + row, color);
 }
 
-void graphics_clear(u32 color) { graphics_fill_rect(0, 0, display_width(), display_height(), color); }
+void graphics_clear(u32 color) { graphics_fill_rect(0, 0, graphics_width(), graphics_height(), color); }
+
+void graphics_set_target(u32 *pixels, u64 width, u64 height, u64 stride)
+{
+	graphics_target_pixels = pixels;
+	graphics_target_width = width;
+	graphics_target_height = height;
+	graphics_target_stride = stride;
+}
+
+void graphics_reset_target(void)
+{
+	graphics_target_pixels = (u32 *)0;
+	graphics_target_width = 0ULL;
+	graphics_target_height = 0ULL;
+	graphics_target_stride = 0ULL;
+}
 
 unsigned int graphics_glyph_width(void) { return 5U; }
 unsigned int graphics_glyph_height(void) { return 10U; }
