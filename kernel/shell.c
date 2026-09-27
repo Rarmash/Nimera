@@ -102,8 +102,18 @@ static void shell_help(void)
 	console_write("  mount <disk>\r\n");
 	console_write("  eject <path>\r\n");
 	console_write("  fsinfo\r\n");
-	console_write("Applications:\r\n");
+	console_write("Applications in /apps (when installed):\r\n");
+	console_write("  ls [path]\r\n");
+	console_write("  pwd\r\n");
 	console_write("  cat <path>\r\n");
+	console_write("  mkdir <path>\r\n");
+	console_write("  touch <path>\r\n");
+	console_write("  rm <path>\r\n");
+	console_write("  rmdir <path>\r\n");
+	console_write("  mv <source> <destination>\r\n");
+	console_write("  write <path> <text>\r\n");
+	console_write("  append <path> <text>\r\n");
+	console_write("  edit <path>\r\n");
 	console_write("  hello [args...]\r\n");
 	console_write("Other commands are searched in /apps.\r\n");
 }

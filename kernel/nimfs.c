@@ -582,6 +582,10 @@ static enum vfs_error nf_append(struct vfs_node *f, const char *d, u64 n) {
 }
 
 static void nf_release(struct vfs_node *node) {
+  /* Mounted roots are static context objects, not heap allocations. */
+  for (unsigned int i = 0U; i < NIMFS_MAX_CONTEXTS; ++i)
+    if (node == &root_nodes[i].vfs)
+      return;
   kfree(node_of(node));
 }
 static enum vfs_error nf_remove(struct vfs_node *f) {
