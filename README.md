@@ -70,6 +70,9 @@ The current milestone successfully:
 - provides a standalone EL0 NimEdit 0.2 at `/apps/edit`, using only the public
   terminal, file, and page-allocation syscalls; its editor buffer grows in
   user memory and is released automatically when the task exits.
+- provides EL0 filesystem utilities at `/apps/ls`, `/apps/mkdir`, `/apps/touch`,
+  `/apps/rm`, `/apps/rmdir`, `/apps/mv`, `/apps/pwd`, `/apps/write`, and
+  `/apps/append`, backed by public directory and mutation syscalls.
 
 The isolated `run-user` milestone also provides the first embedded EL0 task and a small
 syscall boundary. The user image is linked into the kernel ELF, but its
@@ -247,8 +250,9 @@ x0..x5   arguments
 x0       return value
 ```
 
-The ABI currently provides `SYS_write_console = 1`, `SYS_exit = 2`, and the
-minimal file calls `SYS_open`, `SYS_read`, `SYS_write`, and `SYS_close`. Paths
+The ABI currently provides `SYS_write_console = 1`, `SYS_exit = 2`, file calls
+`SYS_open`, `SYS_read`, `SYS_write`, `SYS_close`, and the directory/filesystem
+utility calls described below. Paths
 are passed as pointer-plus-length pairs; the kernel validates and copies them.
 Each dynamic user task has a fixed 16-entry handle table containing its VFS
 node, current offset, and access flags. Handles are released on close and on
@@ -325,10 +329,27 @@ directories, so the editor test define cannot leak into `make run`.
 it checks insertion, the expected `hello from nimedit!` buffer, navigation, and
 allocation cleanup.
 
+Basic filesystem utilities are also standalone EL0 applications: `/apps/ls`,
+`/apps/mkdir`, `/apps/touch`, `/apps/rm`, `/apps/rmdir`, `/apps/mv`,
+`/apps/pwd`, `/apps/write`, and `/apps/append`.
+Their public ABI uses explicit directory handles and fixed-size
+`nimera_dir_entry` records; it does not expose `struct vfs_node` or backend
+internals. `make run-user-utils` boots a development NimFS image containing
+these payloads and runs a short automated create/write/append/read/directory/
+rename/delete regression. The shell no longer
+implements these commands, so `which ls` reports `/apps/ls`.
+
+`cd` remains a shell built-in because it changes the shell's working directory.
+`pwd`, `write`, and `append` are now external EL0 programs. Each new user task
+inherits the shell's current directory as a canonical path; `SYS_getcwd` reads
+that task-local value, so an application does not consult shell state directly.
+The directory syscalls are Nimera-specific and intentionally much smaller than
+a POSIX syscall surface.
+
 ## External command resolution
 
 The shell separates built-ins from ELF applications. Built-ins such as `cd`,
-`ls`, `kedit`, and `run` are handled in the kernel. `edit` resolves to the
+`kedit`, and `run` are handled in the kernel. `edit` resolves to the
 standalone userspace ELF at `/apps/edit`; `cat` is another userspace ELF at
 `/apps/cat`, not a kernel-side command.
 
@@ -361,6 +382,19 @@ separate from ELF segments and the user stack. The kernel tracks live mappings,
 rejects invalid or double frees, and releases all remaining mappings when the
 single dynamic user task exits. This is a small allocation ABI, not a general
 process address-space manager.
+
+The filesystem ABI adds `SYS_open_directory`, `SYS_read_directory`,
+`SYS_mkdir`, `SYS_unlink`, `SYS_rmdir`, and `SYS_rename`. Directory handles
+share the task's bounded handle table with file handles but carry a directory
+type and enumeration offset. `SYS_read_directory` returns one fixed-width
+entry or zero at end-of-directory. The kernel closes all remaining handles on
+EL0 task exit.
+
+`SYS_getcwd` is syscall 21. It copies the bounded, NUL-terminated inherited
+working-directory path into a validated user-writable buffer. The utility
+`write` uses truncate/create plus the existing file-write ABI; `append` uses
+create/append. The kernel's file-write syscall already loops over bounded
+chunks, so these small applications do not need a libc or a formatting layer.
 
 `/apps/keytest` is a standalone freestanding ELF that draws a small full-screen
 test UI, waits for decoded key events, and exits on Ctrl-Q. Only one foreground
@@ -1078,10 +1112,12 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   it contains no VirtIO queue knowledge.
 - `user/runtime/` — the tiny freestanding user entry point and syscall stubs.
 - `user/apps/` — separately linked `hello`, `cat`, file-syscall, `keytest`,
-  `termcheck`, and userspace `edit` ELF programs; artifacts are kept outside
-  the source tree in `build-user-app/`.
+  `termcheck`, userspace `edit`, and filesystem utility ELF programs; artifacts
+  are kept outside the source tree in `build-user-app/`.
 - `user/apps/edit/` — the standalone NimEdit model and renderer. It includes
   only the public userspace ABI and no kernel headers.
+- `user/runtime/fsutil.c` — tiny shared output/error helpers for filesystem
+  utility apps; it is not a libc.
 - `kernel/terminal.c` — bounded ANSI key decoding, one-shot geometry
   detection, fallback, and pending input; it does not access PL011 directly.
 - `kernel/exception.c` — prints synchronous-exception diagnostics through the
@@ -1145,7 +1181,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `run-uart-irq`, `run-uart-overflow`, `run-sched`, `run-blocking`, `run-vfs`,
   `run-vfs-write`, `run-terminal`, `run-terminal-size`,
   `run-terminal-size-fallback`, `run-editor`, `run-user-editor-format`,
-  `run-user-editor`, `run-user-editor-test`, `run-block`, `disk-create`,
+  `run-user-editor`, `run-user-editor-test`, `run-user-utils`, `run-block`,
+  `disk-create`,
   `disk-reset`, `run-terminal-app-format`, `run-terminal-app`,
   `run-terminal-fault`, `run-user-terminal`, and `clean`. Test builds use
   separate directories so their compile-time paths cannot contaminate `make

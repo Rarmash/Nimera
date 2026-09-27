@@ -1,6 +1,8 @@
 #ifndef NIMERA_ABI_SYSCALL_H
 #define NIMERA_ABI_SYSCALL_H
 
+#include <nimera/types.h>
+
 /* Nimera v0 syscall ABI: number in x8, arguments in x0-x5, result in x0. */
 #define NIMERA_SYS_WRITE_CONSOLE 1
 #define NIMERA_SYS_EXIT 2
@@ -16,6 +18,13 @@
 #define NIMERA_SYS_TERM_SET_CURSOR_VISIBLE 12
 #define NIMERA_SYS_MEM_ALLOC 13
 #define NIMERA_SYS_MEM_FREE 14
+#define NIMERA_SYS_OPEN_DIRECTORY 15
+#define NIMERA_SYS_READ_DIRECTORY 16
+#define NIMERA_SYS_MKDIR 17
+#define NIMERA_SYS_UNLINK 18
+#define NIMERA_SYS_RMDIR 19
+#define NIMERA_SYS_RENAME 20
+#define NIMERA_SYS_GETCWD 21
 
 #define NIMERA_OPEN_READ 0x01ULL
 #define NIMERA_OPEN_WRITE 0x02ULL
@@ -32,5 +41,21 @@
 #define NIMERA_NERR_IS_DIRECTORY (-7LL)
 #define NIMERA_NERR_BAD_HANDLE (-8LL)
 #define NIMERA_NERR_TOO_LARGE (-9LL)
+#define NIMERA_NERR_NOT_DIRECTORY (-10LL)
+#define NIMERA_NERR_NOT_EMPTY (-11LL)
+#define NIMERA_NERR_EXISTS (-12LL)
+#define NIMERA_NERR_BUSY (-13LL)
+#define NIMERA_NERR_CROSS_DEVICE (-14LL)
+
+#define NIMERA_DIR_REGULAR 1U
+#define NIMERA_DIR_DIRECTORY 2U
+#define NIMERA_DIR_NAME_MAX 31U
+#define NIMERA_PATH_MAX 128U
+
+struct nimera_dir_entry {
+	u32 type;
+	u32 name_length;
+	char name[NIMERA_DIR_NAME_MAX + 1U];
+};
 
 #endif

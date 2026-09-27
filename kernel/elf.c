@@ -1,4 +1,6 @@
 #include <nimera/elf.h>
+#include <nimera/console.h>
+#include <nimera/format.h>
 #include <nimera/abi/syscall.h>
 #include <nimera/mmu.h>
 #include <nimera/pmm.h>
@@ -35,10 +37,12 @@ static unsigned int active;
 static unsigned char image_storage[ELF_MAX_FILE_SIZE];
 static char *image;
 static struct vfs_node *user_cwd;
+static char user_cwd_path[VFS_PATH_MAX];
 
 #define ELF_MAX_HANDLES 16U
 struct user_handle {
 	unsigned int in_use;
+	unsigned int type;
 	struct vfs_node *node;
 	u64 offset;
 	u64 flags;
@@ -56,6 +60,7 @@ static struct user_allocation allocations[ELF_MAX_ALLOCATIONS];
 static void clear_handle(unsigned int index)
 {
 	handles[index].in_use = 0U;
+	handles[index].type = 0U;
 	handles[index].node = (struct vfs_node *)0;
 	handles[index].offset = 0ULL;
 	handles[index].flags = 0ULL;
@@ -344,6 +349,10 @@ enum elf_result elf_load_user(struct vfs_node *cwd, const char *path,
 		for (unsigned int index = 0U; index < ELF_MAX_HANDLES; ++index)
 			clear_handle(index);
 		user_cwd = cwd;
+		if (vfs_format_path(cwd, user_cwd_path, sizeof(user_cwd_path)) != VFS_OK) {
+			clear_loaded_pages(); image = (char *)0; user_cwd = (struct vfs_node *)0;
+			return ELF_INVALID;
+		}
 		active = 1U;
 		scheduler_enable_user_task_argv(entry, ELF_USER_LIMIT, argc, argv);
 		return ELF_OK;
@@ -359,6 +368,7 @@ void elf_user_task_finished(void)
 	clear_loaded_pages();
 	image = (char *)0;
 	user_cwd = (struct vfs_node *)0;
+	user_cwd_path[0] = '\0';
 	active = 0U;
 }
 
@@ -458,8 +468,18 @@ static long long user_vfs_error(enum vfs_error error)
 	if (error == VFS_NOT_FOUND) return NIMERA_NERR_NOT_FOUND;
 	if (error == VFS_NO_MEMORY) return NIMERA_NERR_NO_MEMORY;
 	if (error == VFS_IS_DIRECTORY) return NIMERA_NERR_IS_DIRECTORY;
+	if (error == VFS_NOT_DIRECTORY) return NIMERA_NERR_NOT_DIRECTORY;
+	if (error == VFS_NOT_EMPTY) return NIMERA_NERR_NOT_EMPTY;
+	if (error == VFS_ALREADY_EXISTS) return NIMERA_NERR_EXISTS;
+	if (error == VFS_BUSY) return NIMERA_NERR_BUSY;
+	if (error == VFS_CROSS_DEVICE) return NIMERA_NERR_CROSS_DEVICE;
 	if (error == VFS_TOO_LARGE) return NIMERA_NERR_TOO_LARGE;
 	return NIMERA_NERR_IO;
+}
+
+static long long user_vfs_result(enum vfs_error error)
+{
+	return error == VFS_OK ? 0LL : user_vfs_error(error);
 }
 
 long long elf_user_open(const char *path, u64 flags)
@@ -491,9 +511,32 @@ long long elf_user_open(const char *path, u64 flags)
 	for (slot = 0U; slot < ELF_MAX_HANDLES && handles[slot].in_use != 0U; ++slot) {}
 	if (slot == ELF_MAX_HANDLES) { vfs_node_release(node); return NIMERA_NERR_NO_HANDLES; }
 	handles[slot].in_use = 1U;
+	handles[slot].type = VFS_NODE_FILE;
 	handles[slot].node = node;
 	handles[slot].offset = (flags & NIMERA_OPEN_APPEND) != 0ULL ? size : 0ULL;
 	handles[slot].flags = flags;
+	return (long long)slot;
+}
+
+long long elf_user_open_directory(const char *path)
+{
+	struct vfs_node *node;
+	unsigned int slot;
+	enum vfs_error error;
+	if (active == 0U || user_cwd == (struct vfs_node *)0 || path == (const char *)0)
+		return NIMERA_NERR_INVALID;
+	error = vfs_resolve(user_cwd, path, &node);
+	if (error != VFS_OK) return user_vfs_error(error);
+	if (vfs_node_type(node) != VFS_NODE_DIRECTORY) {
+		vfs_node_release(node); return NIMERA_NERR_NOT_DIRECTORY;
+	}
+	for (slot = 0U; slot < ELF_MAX_HANDLES && handles[slot].in_use != 0U; ++slot) {}
+	if (slot == ELF_MAX_HANDLES) { vfs_node_release(node); return NIMERA_NERR_NO_HANDLES; }
+	handles[slot].in_use = 1U;
+	handles[slot].type = VFS_NODE_DIRECTORY;
+	handles[slot].node = node;
+	handles[slot].offset = 0ULL;
+	handles[slot].flags = 0ULL;
 	return (long long)slot;
 }
 
@@ -502,6 +545,7 @@ long long elf_user_read(unsigned int handle, char *buffer, u64 length)
 	u64 completed = 0ULL;
 	enum vfs_error error;
 	if (handle >= ELF_MAX_HANDLES || handles[handle].in_use == 0U ||
+		handles[handle].type != VFS_NODE_FILE ||
 		(handles[handle].flags & NIMERA_OPEN_READ) == 0ULL ||
 		buffer == (char *)0) return NIMERA_NERR_BAD_HANDLE;
 	error = vfs_read_at(handles[handle].node, handles[handle].offset,
@@ -516,6 +560,7 @@ long long elf_user_write(unsigned int handle, const char *buffer, u64 length)
 	u64 offset;
 	enum vfs_error error;
 	if (handle >= ELF_MAX_HANDLES || handles[handle].in_use == 0U ||
+		handles[handle].type != VFS_NODE_FILE ||
 		(handles[handle].flags & NIMERA_OPEN_WRITE) == 0ULL ||
 		(length != 0ULL && buffer == (const char *)0)) return NIMERA_NERR_BAD_HANDLE;
 	offset = handles[handle].offset;
@@ -524,6 +569,63 @@ long long elf_user_write(unsigned int handle, const char *buffer, u64 length)
 	error = vfs_write_at(handles[handle].node, offset, buffer, length);
 	if (error != VFS_OK) return user_vfs_error(error);
 	handles[handle].offset = offset + length;
+	return (long long)length;
+}
+
+long long elf_user_read_directory(unsigned int handle,
+	struct nimera_dir_entry *entry)
+{
+	struct vfs_node *node;
+	struct vfs_node *child;
+	enum vfs_error error;
+	if (handle >= ELF_MAX_HANDLES || handles[handle].in_use == 0U ||
+		handles[handle].type != VFS_NODE_DIRECTORY || entry == (struct nimera_dir_entry *)0)
+		return NIMERA_NERR_BAD_HANDLE;
+	node = handles[handle].node;
+	error = vfs_readdir(node, (unsigned int)handles[handle].offset, &child);
+	if (error == VFS_NOT_FOUND) return 0LL;
+	if (error != VFS_OK) return user_vfs_error(error);
+	entry->type = vfs_node_type(child) == VFS_NODE_DIRECTORY ?
+		NIMERA_DIR_DIRECTORY : NIMERA_DIR_REGULAR;
+	entry->name_length = 0U;
+	while (entry->name_length < NIMERA_DIR_NAME_MAX &&
+		vfs_node_name(child)[entry->name_length] != '\0') {
+		entry->name[entry->name_length] = vfs_node_name(child)[entry->name_length];
+		++entry->name_length;
+	}
+	entry->name[entry->name_length] = '\0';
+	++handles[handle].offset;
+	vfs_node_release(child);
+	return 1LL;
+}
+
+long long elf_user_mkdir(const char *path)
+{
+	return user_vfs_result(vfs_mkdir(user_cwd, path, (struct vfs_node **)0));
+}
+
+long long elf_user_unlink(const char *path)
+{
+	return user_vfs_result(vfs_remove(user_cwd, path));
+}
+
+long long elf_user_rmdir(const char *path)
+{
+	return user_vfs_result(vfs_rmdir(user_cwd, path));
+}
+
+long long elf_user_rename(const char *source, const char *destination)
+{
+	return user_vfs_result(vfs_rename(user_cwd, source, destination));
+}
+
+long long elf_user_getcwd(char *buffer, u64 capacity)
+{
+	u64 length = 0ULL;
+	if (active == 0U || buffer == (char *)0) return NIMERA_NERR_INVALID;
+	while (user_cwd_path[length] != '\0') ++length;
+	if (capacity <= length) return NIMERA_NERR_TOO_LARGE;
+	for (u64 index = 0ULL; index <= length; ++index) buffer[index] = user_cwd_path[index];
 	return (long long)length;
 }
 
@@ -560,6 +662,24 @@ int elf_install_test_payload(struct vfs_node *root)
 	extern const unsigned char _binary_build_user_app_filetest_elf_end[];
 	extern const unsigned char _binary_build_user_app_edit_elf_start[];
 	extern const unsigned char _binary_build_user_app_edit_elf_end[];
+	extern const unsigned char _binary_build_user_app_ls_elf_start[];
+	extern const unsigned char _binary_build_user_app_ls_elf_end[];
+	extern const unsigned char _binary_build_user_app_mkdir_elf_start[];
+	extern const unsigned char _binary_build_user_app_mkdir_elf_end[];
+	extern const unsigned char _binary_build_user_app_touch_elf_start[];
+	extern const unsigned char _binary_build_user_app_touch_elf_end[];
+	extern const unsigned char _binary_build_user_app_rm_elf_start[];
+	extern const unsigned char _binary_build_user_app_rm_elf_end[];
+	extern const unsigned char _binary_build_user_app_rmdir_elf_start[];
+	extern const unsigned char _binary_build_user_app_rmdir_elf_end[];
+	extern const unsigned char _binary_build_user_app_mv_elf_start[];
+	extern const unsigned char _binary_build_user_app_mv_elf_end[];
+	extern const unsigned char _binary_build_user_app_pwd_elf_start[];
+	extern const unsigned char _binary_build_user_app_pwd_elf_end[];
+	extern const unsigned char _binary_build_user_app_write_elf_start[];
+	extern const unsigned char _binary_build_user_app_write_elf_end[];
+	extern const unsigned char _binary_build_user_app_append_elf_start[];
+	extern const unsigned char _binary_build_user_app_append_elf_end[];
 	#if NIMERA_TERMINAL_APP_TEST || NIMERA_TERMINAL_FAULT_TEST || NIMERA_TERMINAL_CHECK_TEST
 	extern const unsigned char _binary_build_user_app_keytest_elf_start[];
 	extern const unsigned char _binary_build_user_app_keytest_elf_end[];
@@ -577,7 +697,25 @@ int elf_install_test_payload(struct vfs_node *root)
 			{"/apps/filetest", _binary_build_user_app_filetest_elf_start,
 			 _binary_build_user_app_filetest_elf_end},
 			{"/apps/edit", _binary_build_user_app_edit_elf_start,
-			 _binary_build_user_app_edit_elf_end}
+			 _binary_build_user_app_edit_elf_end},
+			{"/apps/ls", _binary_build_user_app_ls_elf_start,
+			 _binary_build_user_app_ls_elf_end},
+			{"/apps/mkdir", _binary_build_user_app_mkdir_elf_start,
+			 _binary_build_user_app_mkdir_elf_end},
+			{"/apps/touch", _binary_build_user_app_touch_elf_start,
+			 _binary_build_user_app_touch_elf_end},
+			{"/apps/rm", _binary_build_user_app_rm_elf_start,
+			 _binary_build_user_app_rm_elf_end},
+			{"/apps/rmdir", _binary_build_user_app_rmdir_elf_start,
+			 _binary_build_user_app_rmdir_elf_end},
+			{"/apps/mv", _binary_build_user_app_mv_elf_start,
+			 _binary_build_user_app_mv_elf_end},
+			{"/apps/pwd", _binary_build_user_app_pwd_elf_start,
+			 _binary_build_user_app_pwd_elf_end},
+			{"/apps/write", _binary_build_user_app_write_elf_start,
+			 _binary_build_user_app_write_elf_end},
+			{"/apps/append", _binary_build_user_app_append_elf_start,
+			 _binary_build_user_app_append_elf_end}
 			#if NIMERA_TERMINAL_APP_TEST || NIMERA_TERMINAL_FAULT_TEST || NIMERA_TERMINAL_CHECK_TEST
 			,{"/apps/keytest", _binary_build_user_app_keytest_elf_start,
 			 _binary_build_user_app_keytest_elf_end},
@@ -600,7 +738,11 @@ int elf_install_test_payload(struct vfs_node *root)
 		}
 		result = vfs_create_file(root, payloads[index].path,
 			(const char *)payloads[index].start, size, &node);
-		if (result != VFS_OK) return -1;
+		if (result != VFS_OK) {
+			console_write("payload failed: "); console_write(payloads[index].path);
+			console_write(" error="); format_u64_decimal((u64)result); console_write("\r\n");
+			return -1;
+		}
 	}
 	return 0;
 #else

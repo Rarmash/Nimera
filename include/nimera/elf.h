@@ -2,6 +2,7 @@
 #define NIMERA_ELF_H
 
 #include <nimera/types.h>
+#include <nimera/abi/syscall.h>
 
 struct vfs_node;
 
@@ -33,9 +34,16 @@ const char *elf_error_string(enum elf_result result);
 u64 elf_user_base(void);
 u64 elf_user_limit(void);
 long long elf_user_open(const char *path, u64 flags);
+long long elf_user_open_directory(const char *path);
 long long elf_user_read(unsigned int handle, char *buffer, u64 length);
+long long elf_user_read_directory(unsigned int handle, struct nimera_dir_entry *entry);
 long long elf_user_write(unsigned int handle, const char *buffer, u64 length);
 long long elf_user_close(unsigned int handle);
+long long elf_user_mkdir(const char *path);
+long long elf_user_unlink(const char *path);
+long long elf_user_rmdir(const char *path);
+long long elf_user_rename(const char *source, const char *destination);
+long long elf_user_getcwd(char *buffer, u64 capacity);
 void elf_user_close_all(void);
 unsigned int elf_user_open_count(void);
 long long elf_user_alloc(u64 bytes);

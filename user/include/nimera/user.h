@@ -21,5 +21,14 @@ int nimera_terminal_clear_line(void);
 int nimera_terminal_cursor_visible(int visible);
 void *nimera_alloc(unsigned long long bytes);
 int nimera_free(void *address);
+long long nimera_open_directory(const char *path, unsigned long long length);
+long long nimera_read_directory(unsigned long long handle,
+	struct nimera_dir_entry *entry);
+int nimera_mkdir(const char *path, unsigned long long length);
+int nimera_unlink(const char *path, unsigned long long length);
+int nimera_rmdir(const char *path, unsigned long long length);
+int nimera_rename(const char *source, unsigned long long source_length,
+	const char *destination, unsigned long long destination_length);
+long long nimera_getcwd(char *buffer, unsigned long long capacity);
 
 #endif

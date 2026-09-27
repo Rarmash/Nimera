@@ -27,6 +27,14 @@ static int copy_to_user(u64 destination, const char *source, u64 length)
 	return 0;
 }
 
+static int copy_user_path(u64 address, u64 length, char *path)
+{
+	if (length == 0ULL || length >= VFS_PATH_MAX ||
+		copy_from_user(path, address, length) != 0) return -1;
+	path[length] = '\0';
+	return 0;
+}
+
 static long long syscall_write_console(struct irq_frame *frame)
 {
 	char buffer[USER_IO_CHUNK];
@@ -168,6 +176,65 @@ struct irq_frame *syscall_handle(struct irq_frame *frame)
 		frame->x[0] = (u64)elf_user_alloc(frame->x[0]); return frame;
 	case NIMERA_SYS_MEM_FREE:
 		frame->x[0] = (u64)elf_user_free(frame->x[0]); return frame;
+	case NIMERA_SYS_OPEN_DIRECTORY: {
+		char path[VFS_PATH_MAX];
+		frame->x[0] = copy_user_path(frame->x[0], frame->x[1], path) != 0 ?
+			(u64)NIMERA_NERR_INVALID : (u64)elf_user_open_directory(path);
+		return frame;
+	}
+	case NIMERA_SYS_READ_DIRECTORY: {
+		struct nimera_dir_entry entry;
+		if (mmu_user_writable_range(frame->x[1], sizeof(entry)) == 0) {
+			frame->x[0] = (u64)NIMERA_NERR_INVALID; return frame;
+		}
+		long long result = elf_user_read_directory((unsigned int)frame->x[0], &entry);
+		if (result > 0LL && copy_to_user(frame->x[1], (const char *)(const void *)&entry,
+				 sizeof(entry)) != 0) result = NIMERA_NERR_INVALID;
+		frame->x[0] = (u64)result; return frame;
+	}
+	case NIMERA_SYS_MKDIR: {
+		char path[VFS_PATH_MAX];
+		frame->x[0] = copy_user_path(frame->x[0], frame->x[1], path) != 0 ?
+			(u64)NIMERA_NERR_INVALID : (u64)elf_user_mkdir(path);
+		return frame;
+	}
+	case NIMERA_SYS_GETCWD: {
+		char path[VFS_PATH_MAX];
+		u64 destination = frame->x[0];
+		u64 capacity = frame->x[1];
+		if (capacity == 0ULL || capacity > VFS_PATH_MAX ||
+			mmu_user_writable_range(frame->x[0], capacity) == 0) {
+			frame->x[0] = (u64)NIMERA_NERR_INVALID; return frame;
+		}
+		{
+			long long result = elf_user_getcwd(path, capacity);
+			if (result >= 0LL && copy_to_user(destination, path, (u64)result + 1ULL) != 0)
+				result = NIMERA_NERR_INVALID;
+			frame->x[0] = (u64)result;
+		}
+		return frame;
+	}
+	case NIMERA_SYS_UNLINK: {
+		char path[VFS_PATH_MAX];
+		frame->x[0] = copy_user_path(frame->x[0], frame->x[1], path) != 0 ?
+			(u64)NIMERA_NERR_INVALID : (u64)elf_user_unlink(path);
+		return frame;
+	}
+	case NIMERA_SYS_RMDIR: {
+		char path[VFS_PATH_MAX];
+		frame->x[0] = copy_user_path(frame->x[0], frame->x[1], path) != 0 ?
+			(u64)NIMERA_NERR_INVALID : (u64)elf_user_rmdir(path);
+		return frame;
+	}
+	case NIMERA_SYS_RENAME: {
+		char source[VFS_PATH_MAX];
+		char destination[VFS_PATH_MAX];
+		if (copy_user_path(frame->x[0], frame->x[1], source) != 0 ||
+			copy_user_path(frame->x[2], frame->x[3], destination) != 0)
+			frame->x[0] = (u64)NIMERA_NERR_INVALID;
+		else frame->x[0] = (u64)elf_user_rename(source, destination);
+		return frame;
+	}
 	default:
 		frame->x[0] = (u64)NIMERA_NERR_INVALID; return frame;
 	}

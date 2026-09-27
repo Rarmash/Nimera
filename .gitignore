@@ -53,3 +53,6 @@ build-user-editor-format/
 build-user-editor-test/
 build-user-app-test/
 build-user-editor-shell/
+build-user-utils/
+build-utils/
+build-utils-format/

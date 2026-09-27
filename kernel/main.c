@@ -820,6 +820,55 @@ static void pmm_test(void)
 }
 #endif
 
+#if NIMERA_USER_UTILS_TEST
+static int run_user_utility(const char *path, const struct elf_argument *arguments,
+				unsigned int count)
+{
+	enum elf_result result = elf_load_user(vfs_root(), path, arguments, count);
+	if (result != ELF_OK) return -1;
+	scheduler_block_current();
+	while (elf_user_task_active() != 0) arch_wait_for_event();
+	return scheduler_user_exit_status() == 0LL ? 0 : -1;
+}
+
+static void user_utils_test(void)
+{
+	static const struct elf_argument pwd[] = {{"/apps/pwd", 9ULL}};
+	static const struct elf_argument write[] = {
+		{"/apps/write", 11ULL}, {"/tmp/user-utils.txt", 20ULL}, {"hello", 5ULL}};
+	static const struct elf_argument append[] = {
+		{"/apps/append", 12ULL}, {"/tmp/user-utils.txt", 20ULL}, {" world", 6ULL}};
+	static const struct elf_argument cat[] = {
+		{"/apps/cat", 9ULL}, {"/tmp/user-utils.txt", 20ULL}};
+	static const struct elf_argument mkdir[] = {
+		{"/apps/mkdir", 11ULL}, {"/tmp/user-utils-dir", 19ULL}};
+	static const struct elf_argument touch[] = {
+		{"/apps/touch", 11ULL}, {"/tmp/user-utils-dir/file", 24ULL}};
+	static const struct elf_argument ls[] = {
+		{"/apps/ls", 8ULL}, {"/tmp/user-utils-dir", 19ULL}};
+	static const struct elf_argument mv[] = {
+		{"/apps/mv", 8ULL}, {"/tmp/user-utils-dir/file", 24ULL},
+		{"/tmp/user-utils-dir/renamed", 27ULL}};
+	static const struct elf_argument rm[] = {
+		{"/apps/rm", 8ULL}, {"/tmp/user-utils-dir/renamed", 27ULL}};
+	static const struct elf_argument rmdir[] = {
+		{"/apps/rmdir", 11ULL}, {"/tmp/user-utils-dir", 19ULL}};
+	struct { const char *name; const struct elf_argument *arguments; unsigned int count; }
+		cases[] = {
+			{"pwd", pwd, 1U}, {"write", write, 3U}, {"append", append, 3U},
+			{"cat", cat, 2U}, {"mkdir", mkdir, 2U}, {"touch", touch, 2U},
+			{"ls", ls, 2U}, {"mv", mv, 3U}, {"rm", rm, 2U}, {"rmdir", rmdir, 2U}
+		};
+	console_write("Userspace utility test\r\n");
+	for (unsigned int index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+		console_write(cases[index].name); console_write(": ");
+		console_write(run_user_utility(cases[index].arguments[0].text,
+			cases[index].arguments, cases[index].count) == 0 ? "OK\r\n" : "FAILED\r\n");
+	}
+	console_write("Userspace utility test complete.\r\n");
+}
+#endif
+
 void kernel_main(void)
 {
 	timer_init();
@@ -934,6 +983,11 @@ void kernel_main(void)
 	irq_init();
 	scheduler_init();
 irq_enable();
+
+#if NIMERA_USER_UTILS_TEST
+	user_utils_test();
+	return;
+#endif
 
 #if NIMERA_ELF_RUN_TEST
 	{

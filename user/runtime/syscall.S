@@ -70,3 +70,38 @@ nimera_free:
 	mov x8, #14
 	svc #0
 	ret
+	.global nimera_open_directory
+nimera_open_directory:
+	mov x8, #15
+	svc #0
+	ret
+	.global nimera_read_directory
+nimera_read_directory:
+	mov x8, #16
+	svc #0
+	ret
+	.global nimera_mkdir
+nimera_mkdir:
+	mov x8, #17
+	svc #0
+	ret
+	.global nimera_unlink
+nimera_unlink:
+	mov x8, #18
+	svc #0
+	ret
+	.global nimera_rmdir
+nimera_rmdir:
+	mov x8, #19
+	svc #0
+	ret
+	.global nimera_rename
+nimera_rename:
+	mov x8, #20
+	svc #0
+	ret
+	.global nimera_getcwd
+nimera_getcwd:
+	mov x8, #21
+	svc #0
+	ret

@@ -312,7 +312,7 @@ static int add_entry(u32 dirno, u32 child, const char *name) {
         return -1;
       zero(io_buffer, NIMFS_BLOCK_SIZE);
       slot = 0U;
-      break;
+      goto found;
     }
     if (disk_read(dir->blocks[b], io_buffer) != 0)
       return -1;
@@ -624,6 +624,8 @@ static enum vfs_error nf_rename(struct vfs_node *f, const char *name) {
 static enum vfs_error nf_move(struct vfs_node *f, struct vfs_node *d) {
   active_context = node_of(f)->context;
   struct nimfs_node *n = node_of(f);
+  if (node_of(f->parent)->inode == node_of(d)->inode)
+    return VFS_OK;
   if (node_of(d)->context != active_context)
     return VFS_CROSS_DEVICE;
   u32 ino = n->inode;
