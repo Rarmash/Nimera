@@ -962,6 +962,13 @@ irq_enable();
 	}
 #endif
 
+#if NIMERA_COMMAND_TEST
+	console_write("External command test\r\n");
+	shell_command_test();
+	console_write("External command test complete.\r\n");
+	return;
+#endif
+
 #if NIMERA_USER_TEST || NIMERA_USER_PROTECTION_TEST
 	console_write("Nimera userspace test\r\nKernel EL: ");
 	format_u64_decimal(exception_current_el());

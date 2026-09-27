@@ -312,6 +312,26 @@ path remains `run /apps/hello`; the loader only reads the file through VFS.
 truncate, multi-call writes, read-back, and close through the VFS syscall
 boundary. Its image must first be formatted with `make run-elf-format`.
 
+## External command resolution
+
+The shell separates built-ins from ELF applications. Built-ins such as `cd`,
+`ls`, `edit`, and `run` are handled in the kernel. `cat` is a userspace ELF
+installed at `/apps/cat`, not a kernel-side command.
+
+A command containing `/` is executed as that explicit path; a relative path is
+resolved from the current directory. A command without `/` is searched only as
+`/apps/<name>`; there is no environment or configurable `PATH`. `run <path>
+[args...]` remains an explicit/debug form but uses the same launcher. `which`
+reports either a built-in or the `/apps` path. Missing commands, directories,
+and invalid ELF files have separate diagnostics.
+
+After formatting the ELF development image with `make run-elf-format`, run the
+isolated resolution test with `make run-commands`. It covers built-in lookup,
+`/apps` lookup, userspace `cat`, direct `hello` execution with arguments,
+explicit `run`, invalid executables, directories, and missing commands. This
+is still a small shell path: quoting, environment, pipes, redirection, and
+search outside `/apps` are not implemented.
+
 Range I/O is the small common VFS extension used by these syscalls. RAMFS and
 NimFS support reads and writes at a file offset, including partial sectors and
 file extension without sparse holes. It is not a cache or a general file API;
@@ -494,7 +514,7 @@ NimFS from `disk0`. Both backends expose this root namespace:
 ```
 
 `/system/version` is a regular RAMFS file containing the canonical Nimera
-version string. `ls`, `pwd`, `cd`, `mkdir`, `cat`, `touch`, `write`, `append`,
+version string. `ls`, `pwd`, `cd`, `mkdir`, `touch`, `write`, `append`,
 `rm`, `rmdir`, and `mv` use the VFS resolver, so
 relative paths, `.`, `..`, repeated slashes, and root clamping are real path
 operations rather than shell-only output. `ls` reports `Not a directory` when
@@ -640,9 +660,9 @@ nimera $
 The built-in commands include `help`, `echo`, `uptime`, `ticks`, `irqs`, `mem`,
 `threads`, `counter`, `version`, and the VFS commands listed above. `ticks` reports the number of handled EL1 timer IRQs, while `irqs`
 also reports UART RX IRQ and dropped-byte counters.
-They are compiled into the kernel; there is no userspace or external program
-execution. Persistent storage is available only through the explicit NimFS
-development boot target.
+Built-ins are compiled into the kernel; applications are separate ELF files
+loaded through VFS and the EL0 loader. Persistent storage is available only
+through the explicit NimFS development boot target.
 
 The common console API is intentionally only three operations:
 `console_putc()`, `console_write()`, and `console_getc()`. It keeps kernel code
@@ -874,9 +894,8 @@ Instruction Abort when branching to a `ret` instruction stored in writable
 The ordinary `make run` starts the built-in kernel shell. Its line buffer is a
 fixed 128-byte array: printable ASCII is echoed into it, Enter executes the
 line, and Backspace removes the previous character. Input beyond the buffer is
-ignored safely. Parsing recognizes the fourteen commands shown above; there
-is no quoting, escaping, piping, redirection, history, or external command
-execution.
+ignored safely. Parsing has no quoting, escaping, piping, redirection, or
+history.
 
 `make clean` removes generated objects, the ELF, and the link map:
 
@@ -1111,6 +1130,8 @@ This is a freestanding program rather than a hosted application:
   scheduler test; `make run-sched` enables it in `build-sched/`.
 - `-DNIMERA_BLOCKING_TEST=0` keeps the normal shell path out of the blocking
   test; `make run-blocking` enables it in `build-blocking/`.
+- `-DNIMERA_COMMAND_TEST=0` keeps external-command resolution out of the
+  normal shell boot; `make run-commands` enables it in `build-commands/`.
 - `-DNIMERA_VFS_TEST=0` keeps the normal shell path out of the VFS test;
   `make run-vfs` enables it in `build-vfs/`.
 - `-DNIMERA_VFS_WRITE_TEST=0` keeps the mutable VFS test out of the normal

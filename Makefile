@@ -43,6 +43,7 @@ NIMFS_VOLUME_TEST ?= 0
 USER_TEST ?= 0
 USER_PROTECTION_TEST ?= 0
 USER_FILES_TEST ?= 0
+COMMAND_TEST ?= 0
 NIMFS_STORAGE_IMAGE ?= build-storage/nimfs.img
 NIMFS_ROOT_IMAGE ?= build-storage/nimfs-root.img
 NIMFS_DATA_IMAGE ?= build-storage/nimfs-data.img
@@ -106,6 +107,7 @@ CFLAGS := \
 	-DNIMERA_USER_TEST=$(USER_TEST) \
 	-DNIMERA_USER_PROTECTION_TEST=$(USER_PROTECTION_TEST) \
 	-DNIMERA_USER_FILES_TEST=$(USER_FILES_TEST) \
+	-DNIMERA_COMMAND_TEST=$(COMMAND_TEST) \
 	-DNIMERA_ELF_INSTALL_TEST=$(ELF_INSTALL_TEST) \
 	-DNIMERA_ELF_RUN_TEST=$(ELF_RUN_TEST)
 
@@ -123,7 +125,7 @@ OBJECTS += $(BUILD_DIR)/hello-payload.o
 OBJECTS += $(BUILD_DIR)/cat-payload.o $(BUILD_DIR)/filetest-payload.o
 endif
 
-.PHONY: build user-app run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block run-user run-user-protection run-elf-format run-elf run-elf-test run-user-files nimfs-elf-disk-create nimfs-elf-disk-reset disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
+.PHONY: build user-app run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block run-user run-user-protection run-elf-format run-elf run-elf-test run-user-files run-commands nimfs-elf-disk-create nimfs-elf-disk-reset disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
 
 build: $(ELF)
 
@@ -182,13 +184,13 @@ $(USER_APP_BUILD_DIR)/start.o: user/runtime/start.S | $(USER_APP_BUILD_DIR)/.dir
 	$(USER_CC) --target=aarch64-none-elf -c $< -o $@
 
 $(USER_APP_BUILD_DIR)/hello.o: user/apps/hello/main.c | $(USER_APP_BUILD_DIR)/.dir
-	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iuser/include -Iinclude -c $< -o $@
+	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -mgeneral-regs-only -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iuser/include -Iinclude -c $< -o $@
 
 $(USER_APP_BUILD_DIR)/cat.o: user/apps/cat/main.c user/include/nimera/user.h | $(USER_APP_BUILD_DIR)/.dir
-	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iuser/include -Iinclude -c $< -o $@
+	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -mgeneral-regs-only -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iuser/include -Iinclude -c $< -o $@
 
 $(USER_APP_BUILD_DIR)/filetest.o: user/apps/filetest/main.c user/include/nimera/user.h | $(USER_APP_BUILD_DIR)/.dir
-	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iuser/include -Iinclude -c $< -o $@
+	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -mgeneral-regs-only -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iuser/include -Iinclude -c $< -o $@
 
 $(BUILD_DIR)/panic.o: kernel/panic.c include/nimera/console.h include/nimera/panic.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -613,6 +615,11 @@ run-user-files: nimfs-elf-disk-create user-app
 	$(MAKE) BUILD_DIR=build-user-files NIMFS_FORMAT_TEST=0 NIMFS_BOOT=1 ELF_INSTALL_TEST=1 USER_FILES_TEST=1 TERMINAL_SIZE_NO_RESPONSE=1 BLOCK_TEST=0 build
 	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimfs-elf -device virtio-blk-device,drive=nimfs-elf -device loader,file=build-user-files/baremetal-aarch64.elf,cpu-num=0
 
+run-commands: nimfs-elf-disk-create user-app
+	rm -rf build-commands
+	$(MAKE) BUILD_DIR=build-commands NIMFS_BOOT=1 ELF_INSTALL_TEST=1 COMMAND_TEST=1 TERMINAL_SIZE_NO_RESPONSE=1 BLOCK_TEST=0 build
+	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimfs-elf -device virtio-blk-device,drive=nimfs-elf -device loader,file=build-commands/baremetal-aarch64.elf,cpu-num=0
+
 run-nimfs-multi-format: nimfs-root-create nimfs-data-create
 	rm -rf build-nimfs-multi-format
 	$(MAKE) BUILD_DIR=build-nimfs-multi-format NIMFS_FORMAT_TEST=1 NIMFS_MULTI_FORMAT_TEST=1 NIMFS_BOOT=0 BLOCK_TEST=0 build
@@ -653,4 +660,4 @@ run-mounts: nimfs-root-reset nimfs-data-reset
 	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_DATA_IMAGE),format=raw,id=nimfs-data -device virtio-blk-device,drive=nimfs-data -drive if=none,file=$(NIMFS_ROOT_IMAGE),format=raw,id=nimfs-root -device virtio-blk-device,drive=nimfs-root -device loader,file=build-mounts/baremetal-aarch64.elf,cpu-num=0
 
 clean:
-	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-user build-user-protection build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume build-elf build-elf-format build-elf-test build-elf-test2 build-user-files build-user-format build-shell-user build-user-app
+	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-user build-user-protection build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume build-elf build-elf-format build-elf-test build-elf-test2 build-user-files build-user-format build-shell-user build-commands build-user-app

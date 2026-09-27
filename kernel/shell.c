@@ -17,6 +17,9 @@
 
 #define SHELL_LINE_CAPACITY 128U
 
+static const char *application_search_paths[] = { "/apps" };
+static unsigned int shell_string_length(const char *text);
+
 static unsigned int text_equals(const char *left, const char *right)
 {
 	unsigned int index = 0U;
@@ -48,7 +51,7 @@ static void shell_fs_error(enum vfs_error error)
 
 static void shell_help(void)
 {
-	console_write("Available commands:\r\n");
+	console_write("Built-in commands:\r\n");
 	console_write("  help\r\n");
 	console_write("  echo [text]\r\n");
 	console_write("  uptime\r\n");
@@ -62,7 +65,6 @@ static void shell_help(void)
 	console_write("  pwd\r\n");
 	console_write("  cd <path>\r\n");
 	console_write("  mkdir <path>\r\n");
-	console_write("  cat <path>\r\n");
 	console_write("  touch <path>\r\n");
 	console_write("  write <path> <text>\r\n");
 	console_write("  append <path> <text>\r\n");
@@ -77,6 +79,10 @@ static void shell_help(void)
 	console_write("  mount <disk>\r\n");
 	console_write("  eject <path>\r\n");
 	console_write("  fsinfo\r\n");
+	console_write("Applications:\r\n");
+	console_write("  cat <path>\r\n");
+	console_write("  hello [args...]\r\n");
+	console_write("Other commands are searched in /apps.\r\n");
 }
 
 static void shell_disks(void)
@@ -219,48 +225,112 @@ static void shell_eject(const char *argument)
 	console_write("Ejected "); console_write(name); console_write("\r\n");
 }
 
-static void shell_run_program(const char *argument)
+static unsigned int shell_contains_slash(const char *text)
+{
+	for (unsigned int index = 0U; text[index] != '\0'; ++index)
+		if (text[index] == '/') return 1U;
+	return 0U;
+}
+
+static unsigned int shell_is_builtin(const char *command)
+{
+	static const char *builtins[] = { "help", "echo", "uptime", "ticks", "irqs",
+		"mem", "threads", "counter", "version", "ls", "pwd", "cd", "mkdir",
+		"touch", "write", "append", "rm", "rmdir", "mv", "edit", "terminal",
+		"disks", "mounts", "mount", "eject", "run", "fsinfo", "which" };
+	for (unsigned int index = 0U; index < sizeof(builtins) / sizeof(builtins[0]); ++index)
+		if (text_equals(command, builtins[index]) != 0U) return 1U;
+	return 0U;
+}
+
+static int shell_make_application_path(const char *token, char *path)
+{
+	unsigned int length = shell_string_length(token);
+	const char *prefix = application_search_paths[0];
+	unsigned int prefix_length = shell_string_length(prefix);
+	if (shell_contains_slash(token) != 0U) {
+		if (length >= VFS_PATH_MAX) return -1;
+		for (unsigned int index = 0U; index <= length; ++index) path[index] = token[index];
+		return 0;
+	}
+	if (prefix_length + 1U + length >= VFS_PATH_MAX) return -1;
+	for (unsigned int index = 0U; index < prefix_length; ++index) path[index] = prefix[index];
+	path[prefix_length] = '/';
+	for (unsigned int index = 0U; index <= length; ++index)
+		path[prefix_length + 1U + index] = token[index];
+	return 0;
+}
+
+static void shell_launch(const char *token, const char *rest)
 {
 	enum elf_result result;
 	struct elf_argument arguments[ELF_MAX_ARGUMENTS];
-	unsigned int count = 0U;
-	unsigned int total = 0U;
-	const char *cursor = argument;
-
-	if (argument == (const char *)0 || argument[0] == '\0') {
-		console_write("Usage: run <path>\r\n");
-		return;
+	char executable[VFS_PATH_MAX];
+	struct vfs_node *node;
+	unsigned int count = 1U;
+	unsigned int total;
+	const char *cursor = rest == (const char *)0 ? "" : rest;
+	arguments[0].text = token;
+	arguments[0].length = (u64)shell_string_length(token);
+	total = (unsigned int)arguments[0].length;
+	if (token == (const char *)0 || token[0] == '\0' || shell_make_application_path(token, executable) != 0) {
+		console_write("Cannot execute: invalid path\r\n"); return;
 	}
 	while (*cursor != '\0') {
 		const char *start;
 		while (*cursor == ' ' || *cursor == '\t') ++cursor;
 		if (*cursor == '\0') break;
-		if (count == ELF_MAX_ARGUMENTS) {
-			console_write("run: arguments too large\r\n"); return;
-		}
+		if (count == ELF_MAX_ARGUMENTS) { console_write("Cannot execute: arguments too large\r\n"); return; }
 		start = cursor;
 		while (*cursor != '\0' && *cursor != ' ' && *cursor != '\t') ++cursor;
 		arguments[count].text = start;
 		arguments[count].length = (u64)(cursor - start);
-		if (arguments[count].length > ELF_MAX_ARGUMENT_BYTES - total) {
-			console_write("run: arguments too large\r\n"); return;
-		}
+		if (arguments[count].length > ELF_MAX_ARGUMENT_BYTES - total) { console_write("Cannot execute: arguments too large\r\n"); return; }
 		total += (unsigned int)arguments[count].length;
 		++count;
-		if (*cursor != '\0') {
-			*(char *)(unsigned long)cursor = '\0';
-			++cursor;
-		}
+		if (*cursor != '\0') { *(char *)(unsigned long)cursor = '\0'; ++cursor; }
 	}
-	result = elf_load_user(shell_cwd, arguments[0].text, arguments, count);
+	if (vfs_resolve(shell_cwd, executable, &node) != VFS_OK) {
+		console_write("Unknown command: "); console_write(token); console_write("\r\n"); return;
+	}
+	if (vfs_node_type(node) == VFS_NODE_DIRECTORY) {
+		vfs_node_release(node); console_write("Cannot execute directory: "); console_write(executable); console_write("\r\n"); return;
+	}
+	vfs_node_release(node);
+	result = elf_load_user(shell_cwd, executable, arguments, count);
 	if (result != ELF_OK) {
-		console_write("run: "); console_write(elf_error_string(result));
-		console_write("\r\n");
-		return;
+		console_write("Cannot execute "); console_write(executable); console_write(": ");
+		console_write(elf_error_string(result)); console_write("\r\n"); return;
 	}
 	console_write("Entering EL0...\r\n");
 	scheduler_block_current();
 	while (elf_user_task_active() != 0) arch_wait_for_event();
+}
+
+static void shell_run_program(const char *argument)
+{
+	char token[VFS_PATH_MAX];
+	unsigned int length = 0U;
+	const char *cursor = argument;
+	if (cursor == (const char *)0) { console_write("Usage: run <path>\r\n"); return; }
+	while (cursor[length] != '\0' && cursor[length] != ' ' && cursor[length] != '\t') ++length;
+	if (length == 0U || length >= sizeof(token)) { console_write("Usage: run <path>\r\n"); return; }
+	for (unsigned int index = 0U; index < length; ++index) token[index] = cursor[index];
+	token[length] = '\0';
+	while (cursor[length] == ' ' || cursor[length] == '\t') ++length;
+	shell_launch(token, cursor + length);
+}
+
+static void shell_which(const char *command)
+{
+	char path[VFS_PATH_MAX];
+	struct vfs_node *node;
+	if (command == (const char *)0 || command[0] == '\0') { console_write("Usage: which <command>\r\n"); return; }
+	if (shell_is_builtin(command) != 0U) { console_write("builtin: "); console_write(command); console_write("\r\n"); return; }
+	if (shell_make_application_path(command, path) == 0 && vfs_resolve(shell_cwd, path, &node) == VFS_OK) {
+		vfs_node_release(node); console_write(path); console_write("\r\n"); return;
+	}
+	console_write("not found\r\n");
 }
 
 static void shell_fsinfo(void)
@@ -355,31 +425,6 @@ static void shell_mkdir(const char *path)
 	if (error != VFS_OK) {
 		shell_fs_error(error);
 	}
-}
-
-static void shell_cat(const char *path)
-{
-	char buffer[128];
-	struct vfs_node *file;
-	u64 size;
-	enum vfs_error error;
-
-	if (path == (const char *)0) {
-		shell_fs_error(VFS_INVALID_PATH);
-		return;
-	}
-	error = vfs_resolve(shell_cwd, path, &file);
-	if (error == VFS_OK) {
-		error = vfs_read(file, buffer, sizeof(buffer), &size);
-	}
-	if (error != VFS_OK) {
-		shell_fs_error(error);
-		return;
-	}
-	for (u64 index = 0ULL; index < size; ++index) {
-		console_putc(buffer[index]);
-	}
-	console_write("\r\n");
 }
 
 static unsigned int shell_string_length(const char *text)
@@ -670,8 +715,6 @@ static void shell_execute(char *line, unsigned int length)
 		shell_cd(argument);
 	} else if (text_equals(line, "mkdir")) {
 		shell_mkdir(argument);
-	} else if (text_equals(line, "cat")) {
-		shell_cat(argument);
 	} else if (text_equals(line, "touch")) {
 		shell_touch(argument);
 	} else if (text_equals(line, "write")) {
@@ -698,13 +741,40 @@ static void shell_execute(char *line, unsigned int length)
 		shell_eject(argument);
 	} else if (text_equals(line, "run")) {
 		shell_run_program(argument);
+	} else if (text_equals(line, "which")) {
+		shell_which(argument);
 	} else if (text_equals(line, "fsinfo")) {
 		shell_fsinfo();
 	} else if (length != 0U) {
-		console_write("Unknown command: ");
-		console_write(line);
-		console_write("\r\n");
+		shell_launch(line, argument);
 	}
+}
+
+void shell_command_test(void)
+{
+	struct vfs_node *node;
+	char line_which_cat[] = "which cat";
+	char line_which_cd[] = "which cd";
+	char line_cat[] = "cat /system/version";
+	char line_hello[] = "hello one two";
+	char line_explicit[] = "run /apps/cat /system/version";
+	char line_invalid[] = "not-an-elf";
+	char line_directory[] = "command-directory";
+	char line_missing[] = "does-not-exist";
+
+	shell_cwd = vfs_root();
+	(void)vfs_create_file(shell_cwd, "/apps/not-an-elf", "not ELF", 7ULL, &node);
+	if (node != (struct vfs_node *)0) vfs_node_release(node);
+	(void)vfs_mkdir(shell_cwd, "/apps/command-directory", &node);
+	if (node != (struct vfs_node *)0) vfs_node_release(node);
+	console_write("builtin resolution: "); shell_execute(line_which_cd, shell_string_length(line_which_cd));
+	console_write("/apps search: "); shell_execute(line_which_cat, shell_string_length(line_which_cat));
+	console_write("userspace cat: "); shell_execute(line_cat, shell_string_length(line_cat));
+	console_write("hello direct: "); shell_execute(line_hello, shell_string_length(line_hello));
+	console_write("explicit run: "); shell_execute(line_explicit, shell_string_length(line_explicit));
+	console_write("invalid executable guard: "); shell_execute(line_invalid, shell_string_length(line_invalid));
+	console_write("directory execution guard: "); shell_execute(line_directory, shell_string_length(line_directory));
+	console_write("missing command: "); shell_execute(line_missing, shell_string_length(line_missing));
 }
 
 __attribute__((noreturn))

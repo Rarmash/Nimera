@@ -16,7 +16,10 @@ int main(int argc, char **argv)
 		(void)nimera_write(message, sizeof(message) - 1ULL); return 1;
 	}
 	handle = nimera_open(argv[1], length(argv[1]), NIMERA_OPEN_READ);
-	if (handle < 0) return 1;
+	if (handle < 0) {
+		const char message[] = "cat: open failed\n";
+		(void)nimera_write(message, sizeof(message) - 1ULL); return 1;
+	}
 	for (;;) {
 		long long count = nimera_read((unsigned long long)handle, buffer, sizeof(buffer));
 		if (count <= 0) break;

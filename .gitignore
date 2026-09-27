@@ -40,3 +40,5 @@ build-elf-test2/
 build-user-files/
 build-user-format/
 build-shell-user/
+build-commands/
+build-command-format/

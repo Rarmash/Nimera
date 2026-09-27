@@ -128,18 +128,20 @@ static unsigned int segment_permissions(u32 flags)
 	return (flags & PF_X) != 0U ? MMU_USER_READ | MMU_USER_EXEC : MMU_USER_READ;
 }
 
-static unsigned char *stack_address(u64 address)
+/* Build the user stack through its backing pages while the kernel is in EL1.
+ * The pointers written into the stack remain user virtual addresses. */
+static unsigned char *stack_physical_address(u64 address)
 {
 	struct loaded_page *page = find_page(align_down(address));
 	if (page == (struct loaded_page *)0) return (unsigned char *)0;
 	return (unsigned char *)(unsigned long)(page->physical_address +
-		(address - page->virtual_address));
+		(address & (NIMERA_PAGE_SIZE - 1ULL)));
 }
 
 static int stack_put_byte(u64 address, unsigned char value)
 {
-	unsigned char *destination = stack_address(address);
-	if (destination == (unsigned char *)0) return -1;
+	volatile unsigned char *destination = stack_physical_address(address);
+	if (destination == (volatile unsigned char *)0) return -1;
 	*destination = value;
 	return 0;
 }
@@ -156,7 +158,8 @@ static int build_user_stack(const struct elf_argument *arguments,
 		unsigned int count, u64 *argc, u64 *argv)
 {
 	u64 values[ELF_MAX_ARGUMENTS + 1U];
-	u64 sp = ELF_USER_LIMIT;
+	u64 argv_address = ELF_STACK_BASE + 0x20ULL;
+	u64 string_address = ELF_STACK_BASE + 0x100ULL;
 	u64 total = 0ULL;
 	if (count > ELF_MAX_ARGUMENTS) return -1;
 	for (unsigned int index = 0U; index < count; ++index) {
@@ -165,25 +168,19 @@ static int build_user_stack(const struct elf_argument *arguments,
 			return -1;
 		total += arguments[index].length;
 	}
-	for (unsigned int reverse = count; reverse > 0U; --reverse) {
-		unsigned int index = reverse - 1U;
-		if (sp < ELF_STACK_BASE + arguments[index].length + 1ULL) return -1;
-		sp -= arguments[index].length + 1ULL;
-		values[index] = sp;
+	for (unsigned int index = 0U; index < count; ++index) {
+		values[index] = string_address;
 		for (u64 byte = 0ULL; byte < arguments[index].length; ++byte)
-			if (stack_put_byte(sp + byte,
+			if (stack_put_byte(string_address + byte,
 				(unsigned char)arguments[index].text[byte]) != 0) return -1;
-		if (stack_put_byte(sp + arguments[index].length, 0U) != 0) return -1;
+		if (stack_put_byte(string_address + arguments[index].length, 0U) != 0) return -1;
+		string_address += arguments[index].length + 1ULL;
 	}
 	values[count] = 0ULL;
-	sp &= ~15ULL;
-	if (sp < ELF_STACK_BASE + (u64)(count + 1U) * 8ULL) return -1;
-	sp -= (u64)(count + 1U) * 8ULL;
-	sp &= ~15ULL;
 	for (unsigned int index = 0U; index <= count; ++index)
-		if (stack_put_u64(sp + (u64)index * 8ULL, values[index]) != 0) return -1;
+		if (stack_put_u64(argv_address + (u64)index * 8ULL, values[index]) != 0) return -1;
 	*argc = count;
-	*argv = sp;
+	*argv = argv_address;
 	return 0;
 }
 
@@ -297,17 +294,17 @@ enum elf_result elf_load_user(struct vfs_node *cwd, const char *path,
 	{
 		u64 argc;
 		u64 argv;
+		for (unsigned int index = 0U; index < page_count; ++index)
+			if (mmu_map_user_page(pages[index].virtual_address,
+				pages[index].physical_address, pages[index].permissions) != 0) {
+				clear_loaded_pages(); image = (char *)0; return ELF_INVALID;
+			}
 		if (build_user_stack(arguments, argument_count, &argc, &argv) != 0) {
 			clear_loaded_pages(); image = (char *)0; return ELF_INVALID;
 		}
 		for (unsigned int index = 0U; index < ELF_MAX_HANDLES; ++index)
 			clear_handle(index);
 		user_cwd = cwd;
-		for (unsigned int index = 0U; index < page_count; ++index)
-			if (mmu_map_user_page(pages[index].virtual_address,
-				pages[index].physical_address, pages[index].permissions) != 0) {
-				clear_loaded_pages(); image = (char *)0; return ELF_INVALID;
-			}
 		active = 1U;
 		scheduler_enable_user_task_argv(entry, ELF_USER_LIMIT, argc, argv);
 		return ELF_OK;
