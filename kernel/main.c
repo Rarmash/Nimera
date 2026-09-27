@@ -23,6 +23,7 @@
 #include <nimera/user.h>
 #include <nimera/vfs.h>
 #include <nimera/virtio.h>
+#include <nimera/utf8.h>
 
 #define NULL ((void *)0)
 
@@ -1157,6 +1158,13 @@ void kernel_main(void)
 
 #if NIMERA_GRAPHICS_TEST
 	graphics_test();
+#endif
+
+#if NIMERA_UTF8_TEST
+	console_write("UTF-8 decoder/font test\r\n");
+	console_write(utf8_self_test() != 0 ? "decoder: OK\r\n" : "decoder: FAILED\r\n");
+	console_write("UTF-8 test complete.\r\n");
+	return;
 #endif
 
 #if NIMERA_NIMFS_FORMAT_TEST

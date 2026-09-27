@@ -12,6 +12,8 @@ unsigned int graphics_cell_width(void);
 unsigned int graphics_cell_height(void);
 void graphics_draw_char(u64 x, u64 y, char character, u32 foreground,
 				u32 background);
+void graphics_draw_codepoint(u64 x, u64 y, u32 codepoint, u32 foreground,
+				u32 background);
 void graphics_draw_text(u64 x, u64 y, const char *text, u32 color);
 void graphics_test(void);
 

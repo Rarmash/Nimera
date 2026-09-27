@@ -46,21 +46,41 @@ static const unsigned char glyph_underscore[5] = {0x10, 0x10, 0x10, 0x10, 0x10};
 static const unsigned char glyph_bracket[5] = {0x1f, 0x11, 0x11, 0x00, 0x00};
 static const unsigned char glyph_question[5] = {0x02, 0x01, 0x15, 0x02, 0x00};
 
-static const unsigned char *graphics_glyph(char character)
+static const unsigned char glyph_replacement[5] = {0x1f, 0x11, 0x15, 0x11, 0x1f};
+
+static u32 graphics_cyrillic_ascii(u32 codepoint)
 {
-	if (character >= 'a' && character <= 'z') character =
-		(char)(character - 'a' + 'A');
-	if (character >= 'A' && character <= 'Z') return font[character - 'A' + 1];
-	if (character >= '0' && character <= '9') return digits[character - '0'];
-	if (character == '!') return punctuation[0];
-	if (character == ':') return punctuation[1];
-	if (character == '-') return punctuation[3];
-	if (character == '.') return punctuation[5];
-	if (character == '/') return punctuation[6];
-	if (character == '$') return glyph_dollar;
-	if (character == '_') return glyph_underscore;
-	if (character == '[' || character == ']') return glyph_bracket;
-	return glyph_question;
+	/* The first Nimera Mono cut covers the common Cyrillic letters used by
+	 * boot text; visually equivalent Latin shapes keep the font compact. */
+	static const u32 upper[] = {
+		'A','B','V','G','D','E','Z','Z','I','J','K','L','M','N','O','P',
+		'R','S','T','U','F','H','C','C','S','S','Y','E','U','A','B','V','G','D'
+	};
+	if (codepoint >= 0x0410U && codepoint <= 0x0431U)
+		return upper[codepoint - 0x0410U];
+	if (codepoint >= 0x0430U && codepoint <= 0x0451U)
+		return graphics_cyrillic_ascii(codepoint - 0x20U);
+	return 0U;
+}
+
+static const unsigned char *graphics_glyph(u32 codepoint)
+{
+	u32 mapped = graphics_cyrillic_ascii(codepoint);
+	if (mapped != 0U) codepoint = mapped;
+	if (codepoint >= 'a' && codepoint <= 'z') codepoint = codepoint - 'a' + 'A';
+	if (codepoint >= 'A' && codepoint <= 'Z') return font[codepoint - 'A' + 1];
+	if (codepoint >= '0' && codepoint <= '9') return digits[codepoint - '0'];
+	if (codepoint == '!') return punctuation[0];
+	if (codepoint == ':') return punctuation[1];
+	if (codepoint == '-') return punctuation[3];
+	if (codepoint == '.') return punctuation[5];
+	if (codepoint == '/') return punctuation[6];
+	if (codepoint == '?') return glyph_question;
+	if (codepoint == '$') return glyph_dollar;
+	if (codepoint == '_') return glyph_underscore;
+	if (codepoint == '[' || codepoint == ']') return glyph_bracket;
+	if (codepoint == ' ') return (const unsigned char *)0;
+	return glyph_replacement;
 }
 
 void graphics_put_pixel(u64 x, u64 y, u32 color)
@@ -81,15 +101,15 @@ void graphics_fill_rect(u64 x, u64 y, u64 w, u64 h, u32 color)
 
 void graphics_clear(u32 color) { graphics_fill_rect(0, 0, display_width(), display_height(), color); }
 
-unsigned int graphics_glyph_width(void) { return 10U; }
+unsigned int graphics_glyph_width(void) { return 5U; }
 unsigned int graphics_glyph_height(void) { return 10U; }
-unsigned int graphics_cell_width(void) { return 16U; }
+unsigned int graphics_cell_width(void) { return 8U; }
 unsigned int graphics_cell_height(void) { return 16U; }
 
-void graphics_draw_char(u64 x, u64 y, char character, u32 foreground,
+void graphics_draw_codepoint(u64 x, u64 y, u32 codepoint, u32 foreground,
 				u32 background)
 {
-	const unsigned char *glyph = graphics_glyph(character);
+	const unsigned char *glyph = graphics_glyph(codepoint);
 
 	graphics_fill_rect(x, y, graphics_cell_width(), graphics_cell_height(),
 			   background);
@@ -97,8 +117,15 @@ void graphics_draw_char(u64 x, u64 y, char character, u32 foreground,
 	for (u64 column = 0; column < 5ULL; ++column)
 		for (u64 row = 0; row < 5ULL; ++row)
 			if ((glyph[column] >> row) & 1U)
-				graphics_fill_rect(x + column * 2ULL,
-					y + row * 2ULL, 2ULL, 2ULL, foreground);
+				graphics_fill_rect(x + column, y + 3ULL + row * 2ULL,
+					1ULL, 2ULL, foreground);
+}
+
+void graphics_draw_char(u64 x, u64 y, char character, u32 foreground,
+				u32 background)
+{
+	graphics_draw_codepoint(x, y, (u32)(unsigned char)character,
+				foreground, background);
 }
 
 void graphics_draw_text(u64 x, u64 y, const char *text, u32 color)
