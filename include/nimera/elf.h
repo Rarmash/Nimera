@@ -38,5 +38,8 @@ long long elf_user_write(unsigned int handle, const char *buffer, u64 length);
 long long elf_user_close(unsigned int handle);
 void elf_user_close_all(void);
 unsigned int elf_user_open_count(void);
+long long elf_user_alloc(u64 bytes);
+long long elf_user_free(u64 address);
+u64 elf_user_allocation_count(void);
 
 #endif

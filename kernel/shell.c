@@ -71,7 +71,7 @@ static void shell_help(void)
 	console_write("  rm <file>\r\n");
 	console_write("  rmdir <directory>\r\n");
 	console_write("  mv <source> <destination>\r\n");
-	console_write("  edit <path>\r\n");
+	console_write("  kedit <path> (legacy kernel editor)\r\n");
 	console_write("  run <path>\r\n");
 	console_write("  terminal\r\n");
 	console_write("  disks\r\n");
@@ -236,7 +236,7 @@ static unsigned int shell_is_builtin(const char *command)
 {
 	static const char *builtins[] = { "help", "echo", "uptime", "ticks", "irqs",
 		"mem", "threads", "counter", "version", "ls", "pwd", "cd", "mkdir",
-		"touch", "write", "append", "rm", "rmdir", "mv", "edit", "terminal",
+		"touch", "write", "append", "rm", "rmdir", "mv", "kedit", "terminal",
 		"disks", "mounts", "mount", "eject", "run", "fsinfo", "which" };
 	for (unsigned int index = 0U; index < sizeof(builtins) / sizeof(builtins[0]); ++index)
 		if (text_equals(command, builtins[index]) != 0U) return 1U;
@@ -732,7 +732,7 @@ static void shell_execute(char *line, unsigned int length)
 		shell_remove(argument, 1);
 	} else if (text_equals(line, "mv")) {
 		shell_mv(argument);
-	} else if (text_equals(line, "edit")) {
+	} else if (text_equals(line, "kedit")) {
 		shell_edit(argument);
 	} else if (text_equals(line, "terminal")) {
 		shell_terminal();

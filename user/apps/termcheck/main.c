@@ -15,6 +15,15 @@ static void say(const char *text)
 int main(void)
 {
 	struct nimera_terminal_size size;
+	void *first_allocation = nimera_alloc(1ULL);
+	void *second_allocation = nimera_alloc(8193ULL);
+	int allocation_ok = first_allocation != (void *)0 &&
+		second_allocation != (void *)0;
+	int invalid_free_ok = nimera_free((void *)(unsigned long)0x1f000000ULL) != 0;
+	int free_ok = first_allocation != (void *)0 &&
+		nimera_free(first_allocation) == 0 &&
+		nimera_free(first_allocation) != 0 &&
+		second_allocation != (void *)0 && nimera_free(second_allocation) == 0;
 	int pointer_ok = nimera_terminal_size((struct nimera_terminal_size *)0) != 0;
 	int partial_ok = nimera_terminal_size(
 		(struct nimera_terminal_size *)(unsigned long)0x1ffffffcULL) != 0;
@@ -30,5 +39,7 @@ int main(void)
 	say("bad user pointer: "); say(pointer_ok && partial_ok && event_pointer_ok ? "OK\r\n" : "FAIL\r\n");
 	say("cursor validation: "); say(coordinate_ok ? "OK\r\n" : "FAIL\r\n");
 	say("cursor visibility validation: "); say(visibility_ok ? "OK\r\n" : "FAIL\r\n");
-	return (pointer_ok && partial_ok && event_pointer_ok && coordinate_ok && visibility_ok) ? 0 : 1;
+	say("dynamic memory validation: "); say(allocation_ok && invalid_free_ok && free_ok ? "OK\r\n" : "FAIL\r\n");
+	return (pointer_ok && partial_ok && event_pointer_ok && coordinate_ok &&
+		visibility_ok && allocation_ok && invalid_free_ok && free_ok) ? 0 : 1;
 }

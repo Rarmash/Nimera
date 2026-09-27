@@ -9,11 +9,15 @@
 
 #define ELF_USER_BASE 0x10000000ULL
 #define ELF_USER_LIMIT 0x20000000ULL
+#define ELF_DYNAMIC_BASE 0x18000000ULL
+#define ELF_DYNAMIC_LIMIT 0x1f000000ULL
 #define ELF_STACK_PAGES 4ULL
 #define ELF_STACK_BASE (ELF_USER_LIMIT - ELF_STACK_PAGES * NIMERA_PAGE_SIZE)
 #define ELF_MAX_PHNUM 16U
 #define ELF_MAX_PAGES 256U
 #define ELF_MAX_FILE_SIZE (64ULL * 1024ULL)
+#define ELF_MAX_ALLOCATIONS 32U
+#define ELF_MAX_ALLOCATION_PAGES 256U
 #define PT_LOAD 1U
 #define PF_X 1U
 #define PF_W 2U
@@ -40,6 +44,14 @@ struct user_handle {
 	u64 flags;
 };
 static struct user_handle handles[ELF_MAX_HANDLES];
+
+struct user_allocation {
+	unsigned int in_use;
+	u64 virtual_address;
+	u64 page_count;
+	u64 physical_pages[ELF_MAX_ALLOCATION_PAGES];
+};
+static struct user_allocation allocations[ELF_MAX_ALLOCATIONS];
 
 static void clear_handle(unsigned int index)
 {
@@ -87,6 +99,31 @@ static void clear_loaded_pages(void)
 		pmm_free_page(pages[index].physical_address);
 	}
 	page_count = 0U;
+}
+
+static void clear_dynamic_allocations(void)
+{
+	for (unsigned int index = 0U; index < ELF_MAX_ALLOCATIONS; ++index) {
+		if (allocations[index].in_use == 0U) continue;
+		for (u64 page = 0ULL; page < allocations[index].page_count; ++page) {
+			(void)mmu_unmap_user_page(allocations[index].virtual_address +
+				page * NIMERA_PAGE_SIZE);
+			pmm_free_page(allocations[index].physical_pages[page]);
+		}
+		allocations[index].in_use = 0U;
+	}
+}
+
+static int allocation_overlaps(u64 address, u64 length)
+{
+	for (unsigned int index = 0U; index < ELF_MAX_ALLOCATIONS; ++index) {
+		u64 start;
+		if (allocations[index].in_use == 0U) continue;
+		start = allocations[index].virtual_address;
+		if (address < start + allocations[index].page_count * NIMERA_PAGE_SIZE &&
+			start < address + length) return 1;
+	}
+	return 0;
 }
 
 static struct loaded_page *find_page(u64 virtual_address)
@@ -254,7 +291,8 @@ enum elf_result elf_load_user(struct vfs_node *cwd, const char *path,
 			start = align_down(virtual_address);
 			end = align_up(virtual_address + memsz);
 			if (start < ELF_USER_BASE ||
-			    end > ELF_STACK_BASE - NIMERA_PAGE_SIZE || end <= start ||
+				end > ELF_STACK_BASE - NIMERA_PAGE_SIZE || end <= start ||
+				(start < ELF_DYNAMIC_LIMIT && end > ELF_DYNAMIC_BASE) ||
 			    (offset & (NIMERA_PAGE_SIZE - 1ULL)) !=
 			    (virtual_address & (NIMERA_PAGE_SIZE - 1ULL))) {
 				image = (char *)0; return ELF_INVALID;
@@ -317,10 +355,85 @@ void elf_user_task_finished(void)
 	if (active == 0U) return;
 	terminal_show_cursor();
 	elf_user_close_all();
+	clear_dynamic_allocations();
 	clear_loaded_pages();
 	image = (char *)0;
 	user_cwd = (struct vfs_node *)0;
 	active = 0U;
+}
+
+long long elf_user_alloc(u64 bytes)
+{
+	u64 page_count;
+	unsigned int slot = ELF_MAX_ALLOCATIONS;
+	u64 address;
+
+	if (active == 0U || bytes == 0ULL || bytes >
+		ELF_MAX_ALLOCATION_PAGES * NIMERA_PAGE_SIZE ||
+		bytes > ~0ULL - (NIMERA_PAGE_SIZE - 1ULL)) return NIMERA_NERR_INVALID;
+	page_count = (bytes + NIMERA_PAGE_SIZE - 1ULL) / NIMERA_PAGE_SIZE;
+	for (unsigned int index = 0U; index < ELF_MAX_ALLOCATIONS; ++index)
+		if (allocations[index].in_use == 0U) { slot = index; break; }
+	if (slot == ELF_MAX_ALLOCATIONS) return NIMERA_NERR_NO_MEMORY;
+	for (address = ELF_DYNAMIC_BASE;
+		address + page_count * NIMERA_PAGE_SIZE <= ELF_DYNAMIC_LIMIT;
+		address += NIMERA_PAGE_SIZE) {
+		if (!allocation_overlaps(address, page_count * NIMERA_PAGE_SIZE)) break;
+	}
+	if (address + page_count * NIMERA_PAGE_SIZE > ELF_DYNAMIC_LIMIT)
+		return NIMERA_NERR_NO_MEMORY;
+	allocations[slot].virtual_address = address;
+	allocations[slot].page_count = page_count;
+	for (u64 page = 0ULL; page < page_count; ++page) {
+		u64 physical;
+		if (pmm_alloc_page(&physical) != 0) {
+			for (u64 rollback = 0ULL; rollback < page; ++rollback) {
+				(void)mmu_unmap_user_page(address + rollback * NIMERA_PAGE_SIZE);
+				pmm_free_page(allocations[slot].physical_pages[rollback]);
+			}
+			allocations[slot].page_count = 0ULL;
+			return NIMERA_NERR_NO_MEMORY;
+		}
+		if (mmu_map_user_page(address + page * NIMERA_PAGE_SIZE, physical,
+			MMU_USER_READ | MMU_USER_WRITE) != 0) {
+			pmm_free_page(physical);
+			for (u64 rollback = 0ULL; rollback < page; ++rollback) {
+				(void)mmu_unmap_user_page(address + rollback * NIMERA_PAGE_SIZE);
+				pmm_free_page(allocations[slot].physical_pages[rollback]);
+			}
+			allocations[slot].page_count = 0ULL;
+			return NIMERA_NERR_NO_MEMORY;
+		}
+		for (u64 byte = 0ULL; byte < NIMERA_PAGE_SIZE; ++byte)
+			((unsigned char *)(unsigned long)physical)[byte] = 0U;
+		allocations[slot].physical_pages[page] = physical;
+	}
+	allocations[slot].in_use = 1U;
+	return (long long)address;
+}
+
+long long elf_user_free(u64 address)
+{
+	for (unsigned int index = 0U; index < ELF_MAX_ALLOCATIONS; ++index) {
+		if (allocations[index].in_use == 0U ||
+			allocations[index].virtual_address != address) continue;
+		for (u64 page = 0ULL; page < allocations[index].page_count; ++page) {
+			(void)mmu_unmap_user_page(address + page * NIMERA_PAGE_SIZE);
+			pmm_free_page(allocations[index].physical_pages[page]);
+		}
+		allocations[index].in_use = 0U;
+		allocations[index].page_count = 0ULL;
+		return 0LL;
+	}
+	return NIMERA_NERR_INVALID;
+}
+
+u64 elf_user_allocation_count(void)
+{
+	u64 count = 0ULL;
+	for (unsigned int index = 0U; index < ELF_MAX_ALLOCATIONS; ++index)
+		count += allocations[index].in_use != 0U ? 1ULL : 0ULL;
+	return count;
 }
 
 int elf_user_task_active(void)
@@ -445,6 +558,8 @@ int elf_install_test_payload(struct vfs_node *root)
 	extern const unsigned char _binary_build_user_app_cat_elf_end[];
 	extern const unsigned char _binary_build_user_app_filetest_elf_start[];
 	extern const unsigned char _binary_build_user_app_filetest_elf_end[];
+	extern const unsigned char _binary_build_user_app_edit_elf_start[];
+	extern const unsigned char _binary_build_user_app_edit_elf_end[];
 	#if NIMERA_TERMINAL_APP_TEST || NIMERA_TERMINAL_FAULT_TEST || NIMERA_TERMINAL_CHECK_TEST
 	extern const unsigned char _binary_build_user_app_keytest_elf_start[];
 	extern const unsigned char _binary_build_user_app_keytest_elf_end[];
@@ -460,8 +575,10 @@ int elf_install_test_payload(struct vfs_node *root)
 			{"/apps/cat", _binary_build_user_app_cat_elf_start,
 			 _binary_build_user_app_cat_elf_end},
 			{"/apps/filetest", _binary_build_user_app_filetest_elf_start,
-			 _binary_build_user_app_filetest_elf_end}
-			#if NIMERA_TERMINAL_APP_TEST || NIMERA_TERMINAL_FAULT_TEST
+			 _binary_build_user_app_filetest_elf_end},
+			{"/apps/edit", _binary_build_user_app_edit_elf_start,
+			 _binary_build_user_app_edit_elf_end}
+			#if NIMERA_TERMINAL_APP_TEST || NIMERA_TERMINAL_FAULT_TEST || NIMERA_TERMINAL_CHECK_TEST
 			,{"/apps/keytest", _binary_build_user_app_keytest_elf_start,
 			 _binary_build_user_app_keytest_elf_end},
 			{"/apps/faulttest", _binary_build_user_app_faulttest_elf_start,

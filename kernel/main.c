@@ -987,6 +987,21 @@ irq_enable();
 	}
 #endif
 
+#if NIMERA_USER_EDITOR_TEST
+	{
+		struct elf_argument arguments[2] = {{"/apps/edit", 10ULL},
+			{"/tmp/userspace-nimedit.txt", 26ULL}};
+		enum elf_result elf_result = elf_load_user(vfs_root(), arguments[0].text,
+			arguments, 2U);
+		if (elf_result != ELF_OK) panic(elf_error_string(elf_result));
+		console_write("NimEdit userspace test: entering /apps/edit\r\n");
+		scheduler_block_current();
+		while (elf_user_task_active() != 0) arch_wait_for_event();
+		console_write("NimEdit userspace test: task exited\r\n");
+		return;
+	}
+#endif
+
 #if NIMERA_USER_TEST || NIMERA_USER_PROTECTION_TEST
 	console_write("Nimera userspace test\r\nKernel EL: ");
 	format_u64_decimal(exception_current_el());

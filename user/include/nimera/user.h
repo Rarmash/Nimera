@@ -19,5 +19,7 @@ int nimera_terminal_clear(void);
 int nimera_terminal_move_cursor(unsigned int row, unsigned int column);
 int nimera_terminal_clear_line(void);
 int nimera_terminal_cursor_visible(int visible);
+void *nimera_alloc(unsigned long long bytes);
+int nimera_free(void *address);
 
 #endif

@@ -60,3 +60,13 @@ nimera_terminal_cursor_visible:
 	mov x8, #12
 	svc #0
 	ret
+	.global nimera_alloc
+nimera_alloc:
+	mov x8, #13
+	svc #0
+	ret
+	.global nimera_free
+nimera_free:
+	mov x8, #14
+	svc #0
+	ret

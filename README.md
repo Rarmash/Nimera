@@ -67,6 +67,9 @@ The current milestone successfully:
 - loads a separate freestanding AArch64 ELF executable from `/apps/hello`
   through the VFS, maps its `PT_LOAD` segments with EL0 permissions, runs it,
   and reclaims its user pages after `SYS_exit`.
+- provides a standalone EL0 NimEdit 0.2 at `/apps/edit`, using only the public
+  terminal, file, and page-allocation syscalls; its editor buffer grows in
+  user memory and is released automatically when the task exits.
 
 The isolated `run-user` milestone also provides the first embedded EL0 task and a small
 syscall boundary. The user image is linked into the kernel ELF, but its
@@ -312,11 +315,22 @@ path remains `run /apps/hello`; the loader only reads the file through VFS.
 truncate, multi-call writes, read-back, and close through the VFS syscall
 boundary. Its image must first be formatted with `make run-elf-format`.
 
+For the standalone editor path, `make run-user-editor-format` creates a fresh
+development image containing `/apps/edit`; stop it after the format report,
+then `make run-user-editor` boots a direct EL0 editor test. The ordinary shell
+path can launch the same ELF with `edit /path` after an image containing the
+payload has been formatted. These targets use isolated kernel build
+directories, so the editor test define cannot leak into `make run`.
+`make run-user-editor-test` runs the same ELF in a non-interactive model test;
+it checks insertion, the expected `hello from nimedit!` buffer, navigation, and
+allocation cleanup.
+
 ## External command resolution
 
 The shell separates built-ins from ELF applications. Built-ins such as `cd`,
-`ls`, `edit`, and `run` are handled in the kernel. `cat` is a userspace ELF
-installed at `/apps/cat`, not a kernel-side command.
+`ls`, `kedit`, and `run` are handled in the kernel. `edit` resolves to the
+standalone userspace ELF at `/apps/edit`; `cat` is another userspace ELF at
+`/apps/cat`, not a kernel-side command.
 
 A command containing `/` is executed as that explicit path; a relative path is
 resolved from the current directory. A command without `/` is searched only as
@@ -341,6 +355,13 @@ visibility. Rows and columns are zero-based; invalid coordinates and invalid
 user pointers are rejected by the kernel. `SYS_write_console` remains the
 simple text-output syscall.
 
+The userspace memory ABI adds `SYS_mem_alloc` and `SYS_mem_free`. Requests are
+rounded to pages in a dedicated virtual range (`0x18000000..0x1f000000`),
+separate from ELF segments and the user stack. The kernel tracks live mappings,
+rejects invalid or double frees, and releases all remaining mappings when the
+single dynamic user task exits. This is a small allocation ABI, not a general
+process address-space manager.
+
 `/apps/keytest` is a standalone freestanding ELF that draws a small full-screen
 test UI, waits for decoded key events, and exits on Ctrl-Q. Only one foreground
 EL0 application may own terminal input. If it blocks waiting for a key, the
@@ -364,15 +385,15 @@ file extension without sparse holes. It is not a cache or a general file API;
 there are still no directory, `chdir`, delete, rename, standard-stream, or
 process syscalls.
 
-NimEdit 0.1 is entered with the shell command `edit <path>`. It is a kernel
-application, not a userspace process: it uses the common terminal and VFS APIs
-directly. Existing regular files are loaded into one growable flat byte buffer;
-missing files are created only when the first save succeeds. The buffer uses
-ASCII bytes and stores Enter as `\n`. Backspace, Delete, arrows, Home, End,
-preferred-column vertical movement, and clipping of long lines are supported.
-Ctrl-S saves, while Ctrl-Q exits cleanly; a dirty buffer requires a second
-Ctrl-Q. There is no search, undo, tabs, UTF-8 editing, or horizontal scrolling.
-The RAMFS is ephemeral, so saved files disappear when QEMU stops.
+`edit <path>` launches the standalone EL0 NimEdit 0.2 from `/apps/edit`. It
+loads or creates a VFS file, uses a growable flat ASCII byte buffer in
+userspace memory, and supports Enter, Backspace, Delete, arrows, Home, End,
+preferred-column vertical movement, clipping, scrolling, dirty tracking,
+Ctrl-S, and the double-Ctrl-Q dirty exit guard. Its title is
+`NimEdit 0.2 - <path>`. The editor knows only the public userspace ABI: it has
+no kernel headers, kernel editor calls, or direct ANSI escape strings.
+`kedit <path>` remains the legacy kernel editor regression entry point. RAMFS
+files remain ephemeral; use a NimFS boot target for persistence.
 
 ## NimFS v0
 
@@ -1056,9 +1077,11 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `kernel/nimfs.c` — the small versioned whole-disk filesystem and VFS backend;
   it contains no VirtIO queue knowledge.
 - `user/runtime/` — the tiny freestanding user entry point and syscall stubs.
-- `user/apps/` — separately linked `hello`, `cat`, file-syscall, `keytest`, and
-  cursor-fault test ELF programs; artifacts are kept outside the source tree
-  in `build-user-app/`.
+- `user/apps/` — separately linked `hello`, `cat`, file-syscall, `keytest`,
+  `termcheck`, and userspace `edit` ELF programs; artifacts are kept outside
+  the source tree in `build-user-app/`.
+- `user/apps/edit/` — the standalone NimEdit model and renderer. It includes
+  only the public userspace ABI and no kernel headers.
 - `kernel/terminal.c` — bounded ANSI key decoding, one-shot geometry
   detection, fallback, and pending input; it does not access PL011 directly.
 - `kernel/exception.c` — prints synchronous-exception diagnostics through the
@@ -1074,8 +1097,9 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   coalescing, and validation of frees.
 - `kernel/shell.c` — fixed-buffer command shell using only the common Console
   API; it provides the built-in diagnostic and VFS commands plus basic line
-  editing and the `edit` launcher.
-- `kernel/editor.c` — the small built-in NimEdit buffer, editing operations,
+  editing and the legacy `kedit` launcher; external `edit` resolves through
+  `/apps`.
+- `kernel/editor.c` — the legacy built-in `kedit` buffer, editing operations,
   terminal renderer, VFS load/save path, and isolated self-test.
 - `kernel/panic.c` — prints the panic report through Console API and halts in
   a simple `wfe` loop.
@@ -1120,7 +1144,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `run-protection`, `run-protection-write`, `run-protection-exec`, `run-irq`,
   `run-uart-irq`, `run-uart-overflow`, `run-sched`, `run-blocking`, `run-vfs`,
   `run-vfs-write`, `run-terminal`, `run-terminal-size`,
-  `run-terminal-size-fallback`, `run-editor`, `run-block`, `disk-create`,
+  `run-terminal-size-fallback`, `run-editor`, `run-user-editor-format`,
+  `run-user-editor`, `run-user-editor-test`, `run-block`, `disk-create`,
   `disk-reset`, `run-terminal-app-format`, `run-terminal-app`,
   `run-terminal-fault`, `run-user-terminal`, and `clean`. Test builds use
   separate directories so their compile-time paths cannot contaminate `make
@@ -1175,6 +1200,9 @@ This is a freestanding program rather than a hosted application:
 - `-DNIMERA_TERMINAL_CHECK_TEST=0` keeps non-interactive EL0 terminal ABI
   validation out of the normal image; `make run-user-terminal` enables it in
   `build-user-terminal/`.
+- `-DNIMERA_USER_EDITOR_TEST=0` keeps the direct standalone editor runtime
+  path out of the normal image; `make run-user-editor` enables it in
+  `build-user-editor/`.
 - `-DNIMERA_TERMINAL_APP_TEST=0` and `-DNIMERA_TERMINAL_FAULT_TEST=0` keep the
   EL0 terminal test flows out of the normal image; their explicit targets use
   isolated `build-terminal-*` directories and install the corresponding ELF

@@ -47,3 +47,9 @@ build-terminal-app/
 build-terminal-format/
 build-terminal-fault/
 build-user-terminal/
+build-user-terminal-format/
+build-user-editor/
+build-user-editor-format/
+build-user-editor-test/
+build-user-app-test/
+build-user-editor-shell/

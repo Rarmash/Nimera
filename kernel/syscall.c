@@ -164,6 +164,10 @@ struct irq_frame *syscall_handle(struct irq_frame *frame)
 		if (frame->x[0] > 1ULL) frame->x[0] = (u64)NIMERA_NERR_INVALID;
 		else { if (frame->x[0] != 0ULL) terminal_show_cursor(); else terminal_hide_cursor(); frame->x[0] = 0ULL; }
 		return frame;
+	case NIMERA_SYS_MEM_ALLOC:
+		frame->x[0] = (u64)elf_user_alloc(frame->x[0]); return frame;
+	case NIMERA_SYS_MEM_FREE:
+		frame->x[0] = (u64)elf_user_free(frame->x[0]); return frame;
 	default:
 		frame->x[0] = (u64)NIMERA_NERR_INVALID; return frame;
 	}
