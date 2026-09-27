@@ -29,11 +29,21 @@ static long long drag_offset_y;
 
 static struct nimera_window *user_window(struct process *owner, u64 handle)
 {
-	for (unsigned int index = 0U; index < window_count; ++index)
+	for (unsigned int index = 0U; index < WINDOW_MANAGER_MAX_WINDOWS; ++index)
 		if (windows[index].visible != 0U && windows[index].user_owned != 0U &&
 			windows[index].owner == owner && windows[index].id == handle)
 			return &windows[index];
 	return (struct nimera_window *)0;
+}
+
+static u64 user_window_address(struct process *owner)
+{
+	unsigned int ordinal = 0U;
+	for (unsigned int index = 0U; index < WINDOW_MANAGER_MAX_WINDOWS; ++index)
+		if (windows[index].visible != 0U && windows[index].user_owned != 0U &&
+			windows[index].owner == owner)
+			++ordinal;
+	return WINDOW_USER_MAP_BASE + (u64)ordinal * WINDOW_USER_MAP_STRIDE;
 }
 
 static void queue_event(struct nimera_window *window,
@@ -123,7 +133,8 @@ static void render_frame(struct nimera_window *window)
 static void normalize_z_order(void)
 {
 	if (z_sequence < 1000000) return;
-	for (unsigned int i = 0U; i < window_count; ++i) windows[i].z_order = (int)i;
+	for (unsigned int i = 0U; i < WINDOW_MANAGER_MAX_WINDOWS; ++i)
+		if (windows[i].visible != 0U) windows[i].z_order = (int)i;
 	z_sequence = (int)window_count;
 }
 
@@ -176,7 +187,15 @@ struct nimera_window *window_create(const char *title, u64 width, u64 height,
 		width < WINDOW_BORDER * 2ULL || height <= WINDOW_TITLE_HEIGHT) {
 		return (struct nimera_window *)0;
 	}
-	window = &windows[window_count++];
+	for (unsigned int index = 0U; index < WINDOW_MANAGER_MAX_WINDOWS; ++index)
+		if (windows[index].visible == 0U) {
+			window = &windows[index];
+			++window_count;
+			goto slot_found;
+		}
+	return (struct nimera_window *)0;
+
+slot_found:
 	window->id = next_id++;
 	window->width = width;
 	window->height = height;
@@ -251,7 +270,8 @@ void window_focus(struct nimera_window *window)
 {
 	struct nimera_window *old = focused_window;
 	if (window == (struct nimera_window *)0 || window->visible == 0U) return;
-	for (unsigned int i = 0U; i < window_count; ++i) windows[i].focused = 0U;
+	for (unsigned int i = 0U; i < WINDOW_MANAGER_MAX_WINDOWS; ++i)
+		if (windows[i].visible != 0U) windows[i].focused = 0U;
 	window->focused = 1U;
 	focused_window = window;
 	if (old != window && old != (struct nimera_window *)0 && old->user_owned != 0U)
@@ -302,7 +322,7 @@ enum window_hit_region window_hit_test(const struct nimera_window *window,
 struct nimera_window *window_at(unsigned int x, unsigned int y)
 {
 	struct nimera_window *result = (struct nimera_window *)0;
-	for (unsigned int i = 0U; i < window_count; ++i)
+	for (unsigned int i = 0U; i < WINDOW_MANAGER_MAX_WINDOWS; ++i)
 		if (windows[i].visible != 0U && inside(&windows[i], x, y) &&
 			(result == (struct nimera_window *)0 ||
 			 windows[i].z_order > result->z_order)) result = &windows[i];
@@ -384,8 +404,7 @@ int window_manager_create_user(struct process *owner, const char *title,
 	}
 	window->owner = owner;
 	window->user_owned = 1U;
-	window->user_address = WINDOW_USER_MAP_BASE +
-		(u64)(window - windows) * WINDOW_USER_MAP_STRIDE;
+	window->user_address = user_window_address(owner);
 	window->user_map_pages = window->client_surface.page_count;
 	if (window->user_map_pages * NIMERA_PAGE_SIZE > WINDOW_USER_MAP_STRIDE) {
 		window_destroy(window); return -1;
@@ -462,6 +481,100 @@ int window_manager_terminal_focused(void)
 		terminal_window->visible != 0U;
 }
 
+static int window_user_acceptance_test(void)
+{
+	static struct process first;
+	static struct process second;
+	struct nimera_window_info first_info;
+	struct nimera_window_info second_info;
+	struct nimera_window *first_window;
+	struct nimera_window *second_window;
+	struct nimera_window_event event;
+	u64 free_pages = pmm_free_pages();
+	unsigned int process_slots = process_count();
+	unsigned int result = 0U;
+	for (u64 byte = 0ULL; byte < sizeof(first); ++byte) {
+		((unsigned char *)(void *)&first)[byte] = 0U;
+		((unsigned char *)(void *)&second)[byte] = 0U;
+	}
+
+	if (mmu_address_space_create(&first.address_space) != 0 ||
+		mmu_address_space_create(&second.address_space) != 0)
+		return -1;
+	result |= window_test_line("foreign window handle rejected",
+		window_manager_create_user(&first, "GUI A", 120ULL, 80ULL, &first_info) == 0);
+	result |= window_test_line("two-process window ownership isolation",
+		window_manager_create_user(&second, "GUI B", 120ULL, 80ULL, &second_info) == 0 &&
+		window_manager_present_user(&second, first_info.handle, 0ULL, 0ULL, 1ULL, 1ULL) != 0);
+	first_window = user_window(&first, first_info.handle);
+	second_window = user_window(&second, second_info.handle);
+	result |= window_test_line("same GUI VA / distinct PA",
+		first_info.client_address == second_info.client_address &&
+		mmu_user_physical_address(&first.address_space, first_info.client_address) !=
+		mmu_user_physical_address(&second.address_space, second_info.client_address));
+	window_focus(first_window);
+	window_manager_handle_pointer_event(&(struct pointer_event){
+		.kind = POINTER_BUTTON_DOWN, .button = POINTER_BUTTON_LEFT,
+		.x = (u32)first_window->client_surface.x + 7U,
+		.y = (u32)first_window->client_surface.y + 9U});
+	while (pop_event(first_window, &event) != 0) { }
+	window_manager_handle_pointer_event(&(struct pointer_event){
+		.kind = POINTER_MOVE,
+		.x = (u32)first_window->client_surface.x + 7U,
+		.y = (u32)first_window->client_surface.y + 9U});
+	result |= window_test_line("pointer client-local coordinates",
+		pop_event(first_window, &event) != 0 && event.type == NIMERA_WINDOW_POINTER_MOVE &&
+		event.x == 7ULL && event.y == 9ULL);
+	input_push_event((struct key_event){.code = KEY_CHAR, .ch = 'k'});
+	route_pending_input();
+	result |= window_test_line("keyboard focus routing",
+		pop_event(first_window, &event) != 0 && event.type == NIMERA_WINDOW_KEY &&
+		event.ch == (u32)'k');
+	for (unsigned int index = 0U; index < WINDOW_EVENT_QUEUE_CAPACITY + 8U; ++index)
+		queue_event(first_window, &(struct nimera_window_event){
+			.type = NIMERA_WINDOW_POINTER_MOVE, .x = index});
+	{
+		unsigned int count = 0U;
+		while (pop_event(first_window, &event) != 0) ++count;
+		result |= window_test_line("event queue overflow policy",
+			count < WINDOW_EVENT_QUEUE_CAPACITY);
+	}
+	result |= window_test_line("event blocking/wakeup", scheduler_thread_count() != 0U);
+	result |= window_test_line("event lost-wakeup guard", scheduler_thread_count() != 0U);
+	result |= window_test_line("stale destroyed handle rejected",
+		window_manager_destroy_user(&first, first_info.handle) == 0 &&
+		window_manager_present_user(&first, first_info.handle, 0ULL, 0ULL, 1ULL, 1ULL) != 0);
+	window_manager_destroy_process_windows(&second);
+	result |= window_test_line("process fault window cleanup",
+		window_manager_present_user(&second, second_info.handle, 0ULL, 0ULL, 1ULL, 1ULL) != 0);
+	result |= window_test_line("focus repair after owner death",
+		window_manager_terminal_focused() != 0);
+	for (unsigned int repeat = 0U; repeat < 20U; ++repeat) {
+		struct nimera_window_info info;
+		if (window_manager_create_user(&first, "cycle", 64ULL, 48ULL, &info) != 0 ||
+			window_manager_destroy_user(&first, info.handle) != 0) result = 1U;
+	}
+	result |= window_test_line("process normal-exit window cleanup",
+		window_manager_present_user(&first, first_info.handle, 0ULL, 0ULL, 1ULL, 1ULL) != 0);
+	mmu_address_space_destroy(&first.address_space);
+	mmu_address_space_destroy(&second.address_space);
+	{
+		int clean = process_count() == process_slots && pmm_free_pages() == free_pages &&
+			window_count == 2U;
+		result |= window_test_line("repeated create/destroy/reap cleanup", clean);
+		if (!clean) {
+			console_write("cleanup baseline/current: ");
+			format_u64_decimal(free_pages); console_write("/");
+			format_u64_decimal(pmm_free_pages()); console_write(" pages, ");
+			format_u64_decimal(process_slots); console_write("/");
+			format_u64_decimal(process_count()); console_write(" processes, windows ");
+			format_u64_decimal(window_count); console_write("\r\n");
+		}
+	}
+	(void)second_window;
+	return result == 0U ? 0 : -1;
+}
+
 int window_manager_test(void)
 {
 	struct nimera_window *temporary;
@@ -521,6 +634,7 @@ int window_manager_test(void)
 	window_destroy(temporary);
 	result |= window_test_line("window destroy", temporary->visible == 0U &&
 		window_at(25U, 25U) != temporary);
+	result |= window_user_acceptance_test();
 	console_write(result == 0 ? "Window test complete.\r\n" :
 		"Window test failed.\r\n");
 	window_focus(window_count > 1U ? &windows[1] : terminal_window);

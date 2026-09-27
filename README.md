@@ -523,10 +523,11 @@ window and also checks that block and GPU VirtIO devices coexist.
 
 `make run-fb-terminal` selects a framebuffer terminal backend for the existing
 logical terminal API. The backend keeps a character-cell grid, renders the
-Nimera Mono bitmap font into a kernel-owned terminal surface, and asks the
-compositor to flush changed regions. The font uses 8x16 pixel glyphs with a
-9-pixel horizontal advance. At the current `1280x800` mode the normal display
-grid is `142x50`; the window-manager client remains about 132 columns wide.
+Nimera Mono 2 bitmap font into a kernel-owned terminal surface, and asks the
+compositor to flush changed regions. Nimera Mono 2 uses a hand-drawn 10x18
+glyph canvas, a 10-pixel advance, and an 18-pixel line height. At the current
+`1280x800` mode the normal display grid is about `128x44`; the window-manager
+client remains about 120 columns wide.
 The dimensions are derived from the display and font metrics, not hardcoded
 terminal geometry.
 
@@ -536,9 +537,10 @@ bytes, overlong encodings, UTF-16 surrogates, and the Unicode range; malformed
 input becomes U+FFFD. Nimera Mono is intentionally a small bitmap font, not a
 full shaping or international-text engine: normalization, combining marks,
 bidirectional layout, and locale handling are not part of this milestone. Its
-readability cut uses hand-designed 8x8 glyph shapes rendered to 8x16 pixels,
-with distinct lowercase, heavier stems, fuller curves, and Latin-shaped
-Cyrillic fallback glyphs. A visual specimen is included in `make run-graphics`.
+Nimera Mono 2 uses hand-designed wider lowercase, heavier stems, fuller curves,
+and Latin-shaped Cyrillic fallback glyphs. It has no antialiasing or runtime
+font scaling. The complete Latin, punctuation, digit, and Cyrillic specimen is
+available through `make run-font` (an alias of the graphics specimen target).
 
 The ordinary `make run` path remains the ANSI/PL011 backend. In framebuffer
 mode, shell and EL0 application output uses the same terminal API and ABI as
@@ -1345,8 +1347,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   title-bar dragging, and the minimal userspace-window ownership/mapping path.
 - `include/nimera/abi/window.h` — public opaque-handle, shared-client-buffer,
   and bounded window-event ABI shared by the kernel and EL0 applications.
-- `kernel/graphics.c` — bounds-safe software drawing primitives, Nimera Mono
-  rendering, and selectable surface/display drawing targets.
+- `kernel/graphics.c` — bounds-safe software drawing primitives, Nimera Mono 2
+  bitmap rendering, and selectable surface/display drawing targets.
 - `include/nimera/utf8.h` — minimal streaming UTF-8 decoder API.
 - `kernel/utf8.c` — freestanding UTF-8 validation and self-test.
 - `kernel/terminal_fb.c` — framebuffer terminal cell grid, text cursor,
@@ -1438,7 +1440,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `disk-reset`, `run-terminal-app-format`, `run-terminal-app`,
   `run-terminal-fault`, `run-user-terminal`, `run-graphics`,
   `run-fb-terminal`, `run-fb-terminal-test`, `run-compositor`, `run-windows`,
-  `run-user-gui-format`, `run-user-gui`, `run-utf8-test`, and `clean`. Test builds use
+  `run-user-gui-format`, `run-user-gui`, `run-font`, `run-utf8-test`, and `clean`. Test builds use
   separate directories so their compile-time paths cannot contaminate `make
   run`; `run-jobs` uses `build-jobs/` for the background-job test.
 - `README.md` — project status, workflow, and design notes.
