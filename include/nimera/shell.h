@@ -3,5 +3,6 @@
 
 __attribute__((noreturn)) void shell_run(void);
 void shell_command_test(void);
+void shell_redirection_test(void);
 
 #endif

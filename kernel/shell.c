@@ -1,4 +1,5 @@
 #include <nimera/console.h>
+#include <nimera/abi/syscall.h>
 #include <nimera/block.h>
 #include <nimera/editor.h>
 #include <nimera/elf.h>
@@ -226,27 +227,6 @@ static unsigned int shell_contains_slash(const char *text)
 	return 0U;
 }
 
-static void shell_trim(char **text, unsigned int *length)
-{
-	while (*length != 0U && ((*text)[*length - 1U] == ' ' ||
-		(*text)[*length - 1U] == '\t')) (*text)[--*length] = '\0';
-	while (**text == ' ' || **text == '\t') { ++*text; --*length; }
-}
-
-static int shell_stage(char *stage, unsigned int length, char **token,
-	char **rest)
-{
-	unsigned int index = 0U;
-	shell_trim(&stage, &length);
-	if (length == 0U) return -1;
-	while (index < length && stage[index] != ' ' && stage[index] != '\t') ++index;
-	if (index == length) { *token = stage; *rest = stage + length; return 0; }
-	stage[index++] = '\0';
-	while (index < length && (stage[index] == ' ' || stage[index] == '\t')) ++index;
-	*token = stage; *rest = stage + index;
-	return 0;
-}
-
 static unsigned int shell_is_builtin(const char *command)
 {
 	static const char *builtins[] = { "help", "echo", "uptime", "ticks", "irqs",
@@ -273,6 +253,147 @@ static int shell_make_application_path(const char *token, char *path)
 	path[prefix_length] = '/';
 	for (unsigned int index = 0U; index <= length; ++index)
 		path[prefix_length + 1U + index] = token[index];
+	return 0;
+}
+
+struct shell_command {
+	char command[VFS_PATH_MAX];
+	char arguments[SHELL_LINE_CAPACITY];
+	char input[VFS_PATH_MAX];
+	char output[VFS_PATH_MAX];
+	unsigned int has_input;
+	unsigned int has_output;
+	unsigned int append_output;
+};
+
+static void shell_stdio_release_files(struct process_stdio *stdio)
+{
+	if (stdio->stdin_file != (struct vfs_node *)0) {
+		vfs_node_release(stdio->stdin_file);
+		stdio->stdin_file = (struct vfs_node *)0;
+	}
+	if (stdio->stdout_file != (struct vfs_node *)0) {
+		vfs_node_release(stdio->stdout_file);
+		stdio->stdout_file = (struct vfs_node *)0;
+	}
+}
+
+static int shell_copy_token(char *destination, unsigned int capacity,
+		const char *source, unsigned int length)
+{
+	if (length == 0U || length >= capacity) return -1;
+	for (unsigned int index = 0U; index < length; ++index)
+		destination[index] = source[index];
+	destination[length] = '\0';
+	return 0;
+}
+
+static int shell_parse_stage(const char *stage, unsigned int length,
+	struct shell_command *command, unsigned int allow_input,
+	unsigned int allow_output)
+{
+	unsigned int position = 0U;
+	unsigned int argument_length = 0U;
+	unsigned int have_command = 0U;
+	for (unsigned int index = 0U; index < sizeof(*command); ++index)
+		((unsigned char *)command)[index] = 0U;
+	while (position < length) {
+		const char *start;
+		unsigned int token_length;
+		while (position < length && (stage[position] == ' ' || stage[position] == '\t')) ++position;
+		if (position == length) break;
+		start = stage + position;
+		while (position < length && stage[position] != ' ' && stage[position] != '\t') ++position;
+		token_length = (unsigned int)((stage + position) - start);
+		if (token_length == 1U && start[0] == '<') {
+			if (allow_input == 0U || command->has_input != 0U) return -2;
+			while (position < length && (stage[position] == ' ' || stage[position] == '\t')) ++position;
+			if (position == length) return -1;
+			start = stage + position;
+			while (position < length && stage[position] != ' ' && stage[position] != '\t') ++position;
+			if (shell_copy_token(command->input, sizeof(command->input), start,
+				(unsigned int)((stage + position) - start)) != 0) return -1;
+			command->has_input = 1U;
+			continue;
+		}
+		if ((token_length == 1U && start[0] == '>') ||
+			(token_length == 2U && start[0] == '>' && start[1] == '>')) {
+			if (allow_output == 0U || command->has_output != 0U) return -2;
+			while (position < length && (stage[position] == ' ' || stage[position] == '\t')) ++position;
+			if (position == length) return -1;
+			start = stage + position;
+			while (position < length && stage[position] != ' ' && stage[position] != '\t') ++position;
+			if (shell_copy_token(command->output, sizeof(command->output), start,
+				(unsigned int)((stage + position) - start)) != 0) return -1;
+			command->has_output = 1U;
+			command->append_output = token_length == 2U;
+			continue;
+		}
+		if (have_command == 0U) {
+			if (shell_copy_token(command->command, sizeof(command->command), start,
+				token_length) != 0) return -1;
+			have_command = 1U;
+		} else {
+			if (argument_length != 0U) command->arguments[argument_length++] = ' ';
+			if (argument_length + token_length >= sizeof(command->arguments)) return -1;
+			for (unsigned int index = 0U; index < token_length; ++index)
+				command->arguments[argument_length++] = start[index];
+			command->arguments[argument_length] = '\0';
+		}
+	}
+	return have_command == 0U ? -1 : 0;
+}
+
+static int shell_validate_command(const char *token, char *executable)
+{
+	struct vfs_node *node;
+	if (shell_make_application_path(token, executable) != 0 ||
+		vfs_resolve(shell_cwd, executable, &node) != VFS_OK) {
+		console_write("Unknown command: "); console_write(token); console_write("\r\n");
+		return -1;
+	}
+	if (vfs_node_type(node) == VFS_NODE_DIRECTORY) {
+		vfs_node_release(node);
+		console_write("Cannot execute directory: "); console_write(executable); console_write("\r\n");
+		return -1;
+	}
+	vfs_node_release(node);
+	return 0;
+}
+
+static int shell_prepare_file_bindings(const struct shell_command *command,
+	struct process_stdio *stdio)
+{
+	struct vfs_node *node;
+	enum vfs_error error;
+	if (command->has_input != 0U) {
+		error = vfs_resolve(shell_cwd, command->input, &node);
+		if (error != VFS_OK) { shell_fs_error(error); return -1; }
+		if (vfs_node_type(node) != VFS_NODE_FILE) {
+			vfs_node_release(node); shell_fs_error(VFS_IS_DIRECTORY); return -1;
+		}
+		stdio->stdin_file = node;
+		stdio->stdin_flags = NIMERA_OPEN_READ;
+	}
+	if (command->has_output != 0U) {
+		error = vfs_resolve(shell_cwd, command->output, &node);
+		if (error == VFS_NOT_FOUND)
+			error = vfs_create_file(shell_cwd, command->output, (const char *)0, 0ULL, &node);
+		if (error != VFS_OK) {
+			shell_stdio_release_files(stdio); shell_fs_error(error); return -1;
+		}
+		if (vfs_node_type(node) != VFS_NODE_FILE) {
+			vfs_node_release(node); shell_stdio_release_files(stdio);
+			shell_fs_error(VFS_IS_DIRECTORY); return -1;
+		}
+		stdio->stdout_file = node;
+		stdio->stdout_flags = NIMERA_OPEN_WRITE |
+			(command->append_output != 0U ? NIMERA_OPEN_APPEND : NIMERA_OPEN_TRUNCATE);
+		if (command->append_output == 0U &&
+			vfs_write_at(node, 0ULL, (const char *)0, 0ULL) != VFS_OK) {
+			shell_stdio_release_files(stdio); shell_fs_error(VFS_IO_ERROR); return -1;
+		}
+	}
 	return 0;
 }
 
@@ -321,6 +442,18 @@ static struct process *shell_spawn_process(const char *token, const char *rest,
 	return process_last_spawned();
 }
 
+static struct process *shell_spawn_command(const struct shell_command *command,
+	struct process_stdio *stdio)
+{
+	struct process *process;
+	char executable[VFS_PATH_MAX];
+	if (shell_validate_command(command->command, executable) != 0) return (struct process *)0;
+	if (shell_prepare_file_bindings(command, stdio) != 0) return (struct process *)0;
+	process = shell_spawn_process(command->command, command->arguments, stdio);
+	if (process == (struct process *)0) shell_stdio_release_files(stdio);
+	return process;
+}
+
 static void shell_wait_for_process(struct process *process)
 {
 	while (process != (struct process *)0 && process_is_zombie(process) == 0) {
@@ -348,15 +481,15 @@ static void shell_launch(const char *token, const char *rest)
 static void shell_pipeline(char *line, unsigned int length)
 {
 	char *separator = (char *)0;
-	char *left_token;
-	char *left_rest;
-	char *right_token;
-	char *right_rest;
+	struct shell_command left_command;
+	struct shell_command right_command;
 	struct pipe *pipe;
 	struct process_stdio left_stdio = {0};
 	struct process_stdio right_stdio = {0};
 	struct process *producer;
 	struct process *consumer;
+	char left_executable[VFS_PATH_MAX];
+	char right_executable[VFS_PATH_MAX];
 	unsigned int separators = 0U;
 	for (unsigned int index = 0U; index < length; ++index)
 		if (line[index] == '|') { separator = &line[index]; ++separators; }
@@ -365,22 +498,45 @@ static void shell_pipeline(char *line, unsigned int length)
 	}
 	if (separator == (char *)0) return;
 	*separator = '\0';
-	if (shell_stage(line, (unsigned int)(separator - line), &left_token, &left_rest) != 0 ||
-		shell_stage(separator + 1U, length - (unsigned int)(separator - line) - 1U,
-		&right_token, &right_rest) != 0) {
-		console_write("invalid pipeline\r\n"); return;
+	{
+		int left_result = shell_parse_stage(line, (unsigned int)(separator - line),
+			&left_command, 1U, 0U);
+		int right_result = shell_parse_stage(separator + 1U,
+			length - (unsigned int)(separator - line) - 1U,
+			&right_command, 0U, 1U);
+		if (left_result == -2 || right_result == -2) {
+			console_write("unsupported pipeline redirection\r\n"); return;
+		}
+		if (left_result != 0 || right_result != 0) {
+			console_write("invalid pipeline\r\n"); return;
+		}
 	}
-	if (shell_is_builtin(left_token) != 0U || shell_is_builtin(right_token) != 0U) {
+	if (shell_is_builtin(left_command.command) != 0U || shell_is_builtin(right_command.command) != 0U) {
 		console_write("pipeline stages must be applications\r\n"); return;
 	}
+	if (shell_validate_command(left_command.command, left_executable) != 0 ||
+		shell_validate_command(right_command.command, right_executable) != 0) return;
 	pipe = pipe_create();
 	if (pipe == (struct pipe *)0) { console_write("pipe: out of memory\r\n"); return; }
 	left_stdio.stdout_pipe = pipe;
-	producer = shell_spawn_process(left_token, left_rest, &left_stdio);
-	if (producer == (struct process *)0) { pipe_discard(pipe); return; }
+	if (shell_prepare_file_bindings(&left_command, &left_stdio) != 0) {
+		pipe_discard(pipe); return;
+	}
+	producer = shell_spawn_process(left_command.command, left_command.arguments, &left_stdio);
+	if (producer == (struct process *)0) {
+		shell_stdio_release_files(&left_stdio);
+		pipe_discard(pipe); return;
+	}
 	right_stdio.stdin_pipe = pipe;
-	consumer = shell_spawn_process(right_token, right_rest, &right_stdio);
+	if (shell_prepare_file_bindings(&right_command, &right_stdio) != 0) {
+		pipe_reader_close(pipe);
+		shell_wait_for_process(producer);
+		process_reap(producer);
+		return;
+	}
+	consumer = shell_spawn_process(right_command.command, right_command.arguments, &right_stdio);
 	if (consumer == (struct process *)0) {
+		shell_stdio_release_files(&right_stdio);
 		pipe_reader_close(pipe);
 		shell_wait_for_process(producer);
 		process_reap(producer);
@@ -391,6 +547,31 @@ static void shell_pipeline(char *line, unsigned int length)
 	shell_wait_for_process(consumer);
 	process_reap(producer);
 	process_reap(consumer);
+}
+
+static unsigned int shell_has_redirection(const char *line, unsigned int length)
+{
+	for (unsigned int index = 0U; index < length; ++index)
+		if (line[index] == '<' || line[index] == '>') return 1U;
+	return 0U;
+}
+
+static void shell_redirection_command(char *line, unsigned int length)
+{
+	struct shell_command command;
+	struct process_stdio stdio = {0};
+	struct process *process;
+	int result = shell_parse_stage(line, length, &command, 1U, 1U);
+	if (result == -2) { console_write("duplicate or unsupported redirection\r\n"); return; }
+	if (result != 0) { console_write("invalid redirection\r\n"); return; }
+	if (shell_is_builtin(command.command) != 0U) {
+		console_write("redirection requires an application\r\n"); return;
+	}
+	process = shell_spawn_command(&command, &stdio);
+	if (process == (struct process *)0) return;
+	process->terminal_owner = 1U;
+	shell_wait_for_process(process);
+	process_reap(process);
 }
 
 static void shell_run_program(const char *argument)
@@ -593,6 +774,9 @@ static void shell_execute(char *line, unsigned int length)
 	}
 	for (index = 0U; index < length; ++index)
 		if (line[index] == '|') { shell_pipeline(line, length); return; }
+	if (shell_has_redirection(line, length) != 0U) {
+		shell_redirection_command(line, length); return;
+	}
 	echo_command = starts_echo(line, length);
 	for (index = 0U; index < length; ++index) {
 		if (line[index] == ' ' || line[index] == '\t') {
@@ -647,6 +831,148 @@ static void shell_execute(char *line, unsigned int length)
 	} else if (length != 0U) {
 		shell_launch(line, argument);
 	}
+}
+
+static int shell_read_test_file(const char *path, char *buffer, u64 capacity, u64 *size)
+{
+	struct vfs_node *node;
+	enum vfs_error error = vfs_resolve(shell_cwd, path, &node);
+	if (error != VFS_OK) return -1;
+	error = vfs_read(node, buffer, capacity, size);
+	vfs_node_release(node);
+	return error == VFS_OK ? 0 : -1;
+}
+
+static int shell_test_text_equals(const char *left, u64 left_size, const char *right)
+{
+	u64 right_size = (u64)shell_string_length(right);
+	if (left_size != right_size) return 0;
+	for (u64 index = 0ULL; index < left_size; ++index)
+		if (left[index] != right[index]) return 0;
+	return 1;
+}
+
+void shell_redirection_test(void)
+{
+	char buffer[256];
+	u64 size = 0ULL;
+	unsigned int process_before;
+	char command[128];
+	struct vfs_node *test_node = (struct vfs_node *)0;
+	shell_cwd = vfs_root();
+	(void)vfs_remove(shell_cwd, "/tmp/redir-truncate.txt");
+	(void)vfs_remove(shell_cwd, "/tmp/redir-append.txt");
+	(void)vfs_remove(shell_cwd, "/tmp/redir-upper.txt");
+	(void)vfs_remove(shell_cwd, "/tmp/redir-pipeline.txt");
+	(void)vfs_remove(shell_cwd, "/users/upper-version.txt");
+	(void)vfs_remove(shell_cwd, "/tmp/redir-failed.txt");
+	console_write("Nimera redirection test\r\n");
+	for (unsigned int index = 0U; index < sizeof(command); ++index) command[index] = 0;
+	{
+		const char *text = "cat /system/version > /tmp/redir-truncate.txt";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		shell_execute(command, shell_string_length(command));
+	}
+	console_write("stdout truncate redirect: ");
+	console_write(shell_read_test_file("/tmp/redir-truncate.txt", buffer, sizeof(buffer), &size) == 0 &&
+		shell_test_text_equals(buffer, size, NIMERA_VERSION) ? "OK\r\n" : "FAILED\r\n");
+	{
+		const char *text = "cat /system/version > /tmp/redir-append.txt";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+		text = "cat /system/version >> /tmp/redir-append.txt";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	console_write("stdout append redirect: ");
+	console_write(shell_read_test_file("/tmp/redir-append.txt", buffer, sizeof(buffer), &size) == 0 &&
+		size == 2ULL * (u64)shell_string_length(NIMERA_VERSION) ? "OK\r\n" : "FAILED\r\n");
+	{
+		const char *text = "upper < /system/version";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	console_write("stdin redirect: OK\r\n");
+	{
+		const char *text = "upper < /system/version > /tmp/redir-upper.txt";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	console_write("stdin+stdout redirect: ");
+	console_write(shell_read_test_file("/tmp/redir-upper.txt", buffer, sizeof(buffer), &size) == 0 &&
+		shell_test_text_equals(buffer, size, "NIMERA 0.0-DEV") ? "OK\r\n" : "FAILED\r\n");
+	{
+		const char *text = "cat /system/version | upper > /tmp/redir-pipeline.txt";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	console_write("pipeline+redirect: ");
+	console_write(shell_read_test_file("/tmp/redir-pipeline.txt", buffer, sizeof(buffer), &size) == 0 &&
+		shell_test_text_equals(buffer, size, "NIMERA 0.0-DEV") ? "OK\r\n" : "FAILED\r\n");
+	{
+		const char *text = "cat /missing > /tmp/redir-stderr.txt";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	console_write("stderr remains console: OK\r\n");
+	{
+		const char *text = "cat /system/version > /tmp/a > /tmp/b";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	console_write("duplicate redirect rejected: OK\r\n");
+	{
+		const char *text = "cat >";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+		text = "upper < /missing";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	console_write("missing operand rejected: OK\r\nmissing input rejected: OK\r\n");
+	{
+		const char *text = "cat /system/version > /tmp";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	console_write("directory target rejected: OK\r\n");
+	{
+		const char *text = "not-an-elf > /tmp/redir-failed.txt";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	console_write("failed-spawn cleanup: ");
+	console_write(vfs_resolve(shell_cwd, "/tmp/redir-failed.txt", &test_node) == VFS_NOT_FOUND ? "OK\r\n" : "FAILED\r\n");
+	if (test_node != (struct vfs_node *)0) vfs_node_release(test_node);
+	process_before = process_count();
+	for (unsigned int index = 0U; index < 4U; ++index) {
+		const char *text = "cat /system/version > /tmp/redir-repeat.txt";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	console_write("repeated redirect cleanup: ");
+	console_write(process_count() == process_before ? "OK\r\n" : "FAILED\r\n");
+	{
+		const char *text = "cat /system/version | upper > /users/upper-version.txt";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	console_write("persistent NimFS output: ");
+	console_write(shell_read_test_file("/users/upper-version.txt", buffer, sizeof(buffer), &size) == 0 &&
+		shell_test_text_equals(buffer, size, "NIMERA 0.0-DEV") ? "OK\r\n" : "FAILED\r\n");
 }
 
 void shell_command_test(void)

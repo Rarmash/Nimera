@@ -1186,7 +1186,7 @@ void kernel_main(void)
 		}
 		format_u64_decimal(device->block_count * device->block_size);
 		console_write(" bytes\r\nSuperblock: initialized\r\nAllocation bitmap: initialized\r\nInode table: initialized\r\nRoot inode: created\r\nInitial tree: created\r\nNimFS format complete.\r\n");
-		#if !NIMERA_PROCESS_TEST && !NIMERA_PIPE_TEST
+		#if !NIMERA_PROCESS_TEST && !NIMERA_PIPE_TEST && !NIMERA_REDIRECTION_TEST
 		return;
 		#endif
 	}
@@ -1293,6 +1293,11 @@ irq_enable();
 	console_write("External command test\r\n");
 	shell_command_test();
 	console_write("External command test complete.\r\n");
+	return;
+#endif
+
+#if NIMERA_REDIRECTION_TEST
+	shell_redirection_test();
 	return;
 #endif
 

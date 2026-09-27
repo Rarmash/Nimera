@@ -56,5 +56,6 @@ build-user-editor-shell/
 build-user-utils/
 build-processes/
 build-pipes/
+build-redirection/
 build-utils/
 build-utils-format/

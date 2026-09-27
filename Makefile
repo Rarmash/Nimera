@@ -49,6 +49,7 @@ USER_UTILS_TEST ?= 0
 PROCESS_TEST ?= 0
 PIPE_TEST ?= 0
 COMMAND_TEST ?= 0
+REDIRECTION_TEST ?= 0
 TERMINAL_APP_TEST ?= 0
 TERMINAL_FAULT_TEST ?= 0
 TERMINAL_CHECK_TEST ?= 0
@@ -138,6 +139,7 @@ CFLAGS := \
 	-DNIMERA_PROCESS_TEST=$(PROCESS_TEST) \
 	-DNIMERA_PIPE_TEST=$(PIPE_TEST) \
 	-DNIMERA_COMMAND_TEST=$(COMMAND_TEST) \
+	-DNIMERA_REDIRECTION_TEST=$(REDIRECTION_TEST) \
 	-DNIMERA_TERMINAL_APP_TEST=$(TERMINAL_APP_TEST) \
 	-DNIMERA_TERMINAL_FAULT_TEST=$(TERMINAL_FAULT_TEST) \
 	-DNIMERA_TERMINAL_CHECK_TEST=$(TERMINAL_CHECK_TEST) \
@@ -170,7 +172,7 @@ OBJECTS += $(BUILD_DIR)/termcheck-payload.o
 endif
 endif
 
-.PHONY: build user-app run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block run-user run-user-protection run-user-terminal run-user-editor-format run-user-editor run-user-editor-test run-user-utils run-elf-format run-elf run-elf-test run-user-files run-commands run-terminal-app run-terminal-app-format run-terminal-fault run-processes run-pipes nimfs-elf-disk-create nimfs-elf-disk-reset disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
+.PHONY: build user-app run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block run-user run-user-protection run-user-terminal run-user-editor-format run-user-editor run-user-editor-test run-user-utils run-elf-format run-elf run-elf-test run-user-files run-commands run-terminal-app run-terminal-app-format run-terminal-fault run-processes run-pipes run-redirection nimfs-elf-disk-create nimfs-elf-disk-reset disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
 
 build: $(ELF)
 
@@ -798,6 +800,11 @@ run-pipes: nimfs-elf-disk-reset user-app
 	rm -rf build-pipes
 	$(MAKE) BUILD_DIR=build-pipes NIMFS_BOOT=1 NIMFS_FORMAT_TEST=1 ELF_INSTALL_TEST=1 PIPE_TEST=1 TERMINAL_SIZE_NO_RESPONSE=1 BLOCK_TEST=0 build
 	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimfs-elf -device virtio-blk-device,drive=nimfs-elf -device loader,file=build-pipes/baremetal-aarch64.elf,cpu-num=0
+
+run-redirection: nimfs-elf-disk-reset user-app
+	rm -rf build-redirection
+	$(MAKE) BUILD_DIR=build-redirection NIMFS_BOOT=1 NIMFS_FORMAT_TEST=1 ELF_INSTALL_TEST=1 REDIRECTION_TEST=1 TERMINAL_SIZE_NO_RESPONSE=1 BLOCK_TEST=0 build
+	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimfs-elf -device virtio-blk-device,drive=nimfs-elf -device loader,file=build-redirection/baremetal-aarch64.elf,cpu-num=0
 
 run-nimfs-multi-format: nimfs-root-create nimfs-data-create
 	rm -rf build-nimfs-multi-format

@@ -152,6 +152,20 @@ static void initialize_standard_handles(struct process *process,
 		process->handles[NIMERA_STDERR].pipe = stdio->stderr_pipe;
 		pipe_writer_open(stdio->stderr_pipe);
 	}
+	if (stdio->stdin_file != (struct vfs_node *)0) {
+		process->handles[NIMERA_STDIN].type = PROCESS_HANDLE_VFS_FILE;
+		process->handles[NIMERA_STDIN].node = stdio->stdin_file;
+		process->handles[NIMERA_STDIN].flags = stdio->stdin_flags;
+	}
+	if (stdio->stdout_file != (struct vfs_node *)0) {
+		u64 size = 0ULL;
+		process->handles[NIMERA_STDOUT].type = PROCESS_HANDLE_VFS_FILE;
+		process->handles[NIMERA_STDOUT].node = stdio->stdout_file;
+		process->handles[NIMERA_STDOUT].flags = stdio->stdout_flags;
+		if ((stdio->stdout_flags & NIMERA_OPEN_APPEND) != 0ULL &&
+			vfs_get_size(stdio->stdout_file, &size) == VFS_OK)
+			process->handles[NIMERA_STDOUT].offset = size;
+	}
 }
 #define handles (operation_process()->handles)
 

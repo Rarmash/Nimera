@@ -48,6 +48,10 @@ struct process_stdio {
 	struct pipe *stdin_pipe;
 	struct pipe *stdout_pipe;
 	struct pipe *stderr_pipe;
+	struct vfs_node *stdin_file;
+	struct vfs_node *stdout_file;
+	u64 stdin_flags;
+	u64 stdout_flags;
 };
 
 struct process_allocation {

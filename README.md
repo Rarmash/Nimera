@@ -73,6 +73,9 @@ The current milestone successfully:
 - provides EL0 filesystem utilities at `/apps/ls`, `/apps/mkdir`, `/apps/touch`,
   `/apps/rm`, `/apps/rmdir`, `/apps/mv`, `/apps/pwd`, `/apps/write`, and
   `/apps/append`, backed by public directory and mutation syscalls.
+- supports the first shell redirections `<`, `>`, and `>>` by binding VFS files
+  to process standard handles, including redirection on the right side of the
+  existing one-stage pipeline.
 
 The isolated `run-user` milestone also provides the first embedded EL0 task and a small
 syscall boundary. The user image is linked into the kernel ELF, but its
@@ -366,8 +369,9 @@ After formatting the ELF development image with `make run-elf-format`, run the
 isolated resolution test with `make run-commands`. It covers built-in lookup,
 `/apps` lookup, userspace `cat`, direct `hello` execution with arguments,
 explicit `run`, invalid executables, directories, and missing commands. This
-is still a small shell path: quoting, environment, pipes, redirection, and
-search outside `/apps` are not implemented.
+is still a small shell path: quoting, environment, and search outside `/apps`
+are not implemented. One pipe and the limited `<`, `>`, `>>` redirections are
+available as described above.
 
 ## Userspace terminal ABI
 
@@ -457,8 +461,30 @@ cat /system/version | upper
 `/apps/cat` reads either a path or standard input, and `/apps/upper` converts
 ASCII lowercase input to uppercase. `make run-pipes` runs an isolated
 concurrent-process test and prints the transformed stream. This is a small
-Nimera stream API, not a claim of POSIX compatibility; there is no general
-redirection, pipeline graph, buffering framework, or shell scripting.
+Nimera stream API, not a claim of POSIX compatibility.
+
+The shell also supports the deliberately small redirection grammar `<`, `>`,
+and `>>` when operators are separate whitespace-delimited tokens:
+
+```text
+upper < /system/version
+cat /system/version > /tmp/version.txt
+cat /system/version >> /tmp/version.txt
+cat /system/version | upper > /tmp/upper.txt
+```
+
+`>` creates or truncates a file; `>>` creates or appends to it. In a one-stage
+pipeline, input redirection is allowed on the left command and output
+redirection on the right command. Redirection prepares the initial process
+handles 0 and 1, so applications continue to use ordinary `SYS_READ` and
+`SYS_WRITE` calls. Handle ownership is transferred on successful spawn and
+rolled back on failure. Handle 2 remains connected to the console.
+`make run-redirection` runs the isolated acceptance test, including a
+persistent NimFS output proof.
+
+This is intentionally not a POSIX shell: there is no quoting, escaping, `2>` or
+`>&`, arbitrary file descriptors, heredoc, command substitution, multiple
+pipelines, or background jobs. Operators must be separate tokens.
 
 `edit <path>` launches the standalone EL0 NimEdit 0.2 from `/apps/edit`. It
 loads or creates a VFS file, uses a growable flat ASCII byte buffer in
