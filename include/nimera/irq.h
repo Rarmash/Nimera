@@ -26,6 +26,7 @@ void irq_restore(u64 state);
 u64 irq_timer_ticks(void);
 u64 irq_uart_count(void);
 u64 irq_uart_dropped_bytes(void);
+u64 irq_user_preemptions(void);
 struct irq_frame *irq_handle(struct irq_frame *frame);
 
 void arch_irq_enable(void);

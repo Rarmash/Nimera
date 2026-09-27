@@ -30,3 +30,5 @@ build-nimfs-multi/
 build-mounts/
 build-volume/
 build-run/
+build-user/
+build-user-protection/

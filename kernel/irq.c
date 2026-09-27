@@ -15,6 +15,7 @@ extern u64 uart_dropped_bytes(void);
 
 static struct irq_platform_info platform_info;
 static volatile u64 timer_irq_count;
+static volatile u64 user_preemption_count;
 
 void irq_init(void)
 {
@@ -24,6 +25,7 @@ void irq_init(void)
 	arch_timer_irq_init();
 	uart_enable_rx_interrupt();
 	timer_irq_count = 0ULL;
+	user_preemption_count = 0ULL;
 }
 
 void irq_enable(void)
@@ -60,6 +62,7 @@ struct irq_frame *irq_handle(struct irq_frame *frame)
 	}
 	if (interrupt_id == platform_info.timer_intid) {
 		++timer_irq_count;
+		if ((frame->spsr & 0x0fULL) == 0ULL) ++user_preemption_count;
 		arch_timer_irq_rearm();
 		frame = scheduler_schedule(frame);
 		platform_gic_end(interrupt_id);
@@ -84,4 +87,9 @@ u64 irq_uart_count(void)
 u64 irq_uart_dropped_bytes(void)
 {
 	return uart_dropped_bytes();
+}
+
+u64 irq_user_preemptions(void)
+{
+	return user_preemption_count;
 }

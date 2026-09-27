@@ -6,7 +6,8 @@
 enum thread_state {
 	THREAD_RUNNING,
 	THREAD_READY,
-	THREAD_WAITING
+	THREAD_WAITING,
+	THREAD_TERMINATED
 };
 
 struct irq_frame {
@@ -14,7 +15,10 @@ struct irq_frame {
 	u64 reserved0;
 	u64 elr;
 	u64 spsr;
-	u64 reserved[2];
+	u64 sp_el0;
+	u64 esr;
+	u64 far;
+	u64 reserved;
 };
 
 struct thread {
@@ -40,6 +44,11 @@ u64 scheduler_worker_counter(void);
 int scheduler_worker_saw_shell_waiting(void);
 int scheduler_stack_ok(void);
 void scheduler_test(void);
+void scheduler_enable_user_task(u64 entry, u64 stack_top, u64 argument);
+struct irq_frame *scheduler_terminate_current(struct irq_frame *frame);
+int scheduler_user_done(void);
+long long scheduler_user_exit_status(void);
+void scheduler_set_user_exit_status(long long status);
 __attribute__((noreturn)) void thread_entry_returned(void);
 
 #endif

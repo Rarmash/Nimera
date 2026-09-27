@@ -16,6 +16,8 @@ typedef unsigned long long descriptor_t;
 #define DESC_ATTR_DEVICE (1ULL << 2)
 #define DESC_AP_RW_EL1 (0ULL << 6)
 #define DESC_AP_RO_EL1 (2ULL << 6)
+#define DESC_AP_RW_EL0 (1ULL << 6)
+#define DESC_AP_RO_EL0 (3ULL << 6)
 #define DESC_UXN (1ULL << 54)
 #define DESC_PXN (1ULL << 53)
 #define DESC_PAGE_ATTRIBUTES (DESC_AF | DESC_SH_INNER | 0x1dcULL | \
@@ -58,6 +60,14 @@ extern char __bss_start[];
 extern char __bss_end[];
 extern char __stack_bottom[];
 extern char __stack_top[];
+extern char __user_text_start[];
+extern char __user_text_end[];
+extern char __user_rodata_start[];
+extern char __user_rodata_end[];
+extern char __user_data_start[];
+extern char __user_data_end[];
+extern char __user_stack_bottom[];
+extern char __user_stack_top[];
 
 static u64 read_sctlr(void)
 {
@@ -139,6 +149,24 @@ static descriptor_t normal_ro_nx(u64 address)
 {
 	return address | DESC_VALID | DESC_AF | DESC_SH_INNER |
 	       DESC_ATTR_NORMAL | DESC_AP_RO_EL1 | DESC_PXN | DESC_UXN;
+}
+
+static descriptor_t user_ro_x(u64 address)
+{
+	return address | DESC_VALID | DESC_AF | DESC_SH_INNER |
+	       DESC_ATTR_NORMAL | DESC_AP_RO_EL0 | DESC_PXN;
+}
+
+static descriptor_t user_ro_nx(u64 address)
+{
+	return address | DESC_VALID | DESC_AF | DESC_SH_INNER |
+	       DESC_ATTR_NORMAL | DESC_AP_RO_EL0 | DESC_PXN | DESC_UXN;
+}
+
+static descriptor_t user_rw_nx(u64 address)
+{
+	return address | DESC_VALID | DESC_AF | DESC_SH_INNER |
+	       DESC_ATTR_NORMAL | DESC_AP_RW_EL0 | DESC_PXN | DESC_UXN;
 }
 
 static descriptor_t device_rw_nx(u64 address)
@@ -274,6 +302,27 @@ static void validate_section_ranges(const struct memory_map *map)
 	for (unsigned int index = 0U; index < 4U; ++index) {
 		if (ends[index] > starts[index + 1U]) {
 			panic("MMU kernel permission ranges overlap");
+		}
+	}
+	{
+		u64 user_starts[] = {symbol_address(__user_text_start),
+			symbol_address(__user_rodata_start), symbol_address(__user_data_start),
+			symbol_address(__user_stack_bottom)};
+		u64 user_ends[] = {symbol_address(__user_text_end),
+			symbol_address(__user_rodata_end), symbol_address(__user_data_end),
+			symbol_address(__user_stack_top)};
+		for (unsigned int index = 0U; index < 4U; ++index) {
+			if (user_ends[index] < user_starts[index] ||
+			    user_starts[index] < ram_start || user_ends[index] > ram_end ||
+			    (user_starts[index] & (NIMERA_PAGE_SIZE - 1ULL)) != 0ULL ||
+			    (user_ends[index] & (NIMERA_PAGE_SIZE - 1ULL)) != 0ULL) {
+				panic("MMU user section is invalid");
+			}
+		}
+		if (symbol_address(__user_text_end) > symbol_address(__user_rodata_start) ||
+		    symbol_address(__user_rodata_end) > symbol_address(__user_data_start) ||
+		    symbol_address(__user_data_end) > symbol_address(__user_stack_bottom)) {
+			panic("MMU user permission ranges overlap");
 		}
 	}
 }
@@ -429,6 +478,18 @@ void mmu_init(const struct memory_map *map)
 	map_permission_range(root, symbol_address(__bss_start),
 				     symbol_address(__stack_top),
 				     descriptor_attributes(normal_rw_nx(0ULL)));
+	map_permission_range(root, symbol_address(__user_text_start),
+				     symbol_address(__user_text_end),
+				     descriptor_attributes(user_ro_x(0ULL)));
+	map_permission_range(root, symbol_address(__user_rodata_start),
+				     symbol_address(__user_rodata_end),
+				     descriptor_attributes(user_ro_nx(0ULL)));
+	map_permission_range(root, symbol_address(__user_data_start),
+				     symbol_address(__user_data_end),
+				     descriptor_attributes(user_rw_nx(0ULL)));
+	map_permission_range(root, symbol_address(__user_stack_bottom),
+				     symbol_address(__user_stack_top),
+				     descriptor_attributes(user_rw_nx(0ULL)));
 	uart_physical_address = irq_info.uart_base;
 	map_device_range(root, irq_info.uart_base, irq_info.uart_size);
 	map_device_range(root, irq_info.gic_distributor_base,
@@ -444,6 +505,23 @@ void mmu_init(const struct memory_map *map)
 					 : "memory");
 	__asm__ volatile("isb" ::: "memory");
 	initialized = 1U;
+}
+
+int mmu_user_readable_range(u64 address, u64 length)
+{
+	u64 end;
+
+	if (length == 0ULL) return 1;
+	if (address > ~0ULL - length) return 0;
+	end = address + length;
+	return (address >= symbol_address(__user_text_start) &&
+		end <= symbol_address(__user_text_end)) ||
+	       (address >= symbol_address(__user_rodata_start) &&
+		end <= symbol_address(__user_rodata_end)) ||
+	       (address >= symbol_address(__user_data_start) &&
+		end <= symbol_address(__user_data_end)) ||
+	       (address >= symbol_address(__user_stack_bottom) &&
+		end <= symbol_address(__user_stack_top));
 }
 
 int mmu_map_device_range(u64 start, u64 size)

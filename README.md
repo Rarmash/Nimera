@@ -65,6 +65,14 @@ The current milestone successfully:
   NimFS volume can be mounted below `/volumes` with a persistent bounded label;
   volumes can be logically ejected and remounted without formatting.
 
+The isolated `run-user` milestone also provides the first EL0 task and a small
+syscall boundary. The user image is linked into the kernel ELF, but its
+`.user.text`, `.user.rodata`, `.user.data`, and `.user.bss` sections receive
+separate permissions: EL0 text is read-only/executable, while user data and
+the 16 KiB user stack are read-write/non-executable. Kernel code and MMIO
+remain EL1-only. There is still one global page table, no processes, and no ELF
+loader.
+
 There is currently no libc, userspace,
 processes, UART TX interrupt path, or other larger OS subsystem. The current
 RAMFS root is RAM-only and disappears on reboot; the separate NimFS boot mode
@@ -194,6 +202,46 @@ NimEdit uses this logical API rather than knowing PL011 registers or the ANSI
 protocol. Geometry is detected once per boot; live resize is not implemented.
 There is no framebuffer, native graphics backend, Unicode input, or general
 VT100 emulator yet.
+
+## First EL0 userspace and syscalls
+
+The kernel remains in AArch64 EL1. The test task runs in EL0t with a separate
+`SP_EL0`; exception entry continues to use the EL1 stack. A synchronous EL0
+exception recognizes `SVC` (`ESR_EL1.EC = 0x15`) and dispatches the syscall
+without entering the fatal kernel-exception path. The minimal Nimera ABI is:
+
+```text
+x8       syscall number
+x0..x5   arguments
+x0       return value
+```
+
+Only two syscall numbers exist so far: `SYS_write_console = 1`, which accepts
+a validated user pointer and length, and `SYS_exit = 2`. User code calls the
+small stubs in `user/syscall.S`; it does not link against `console_write()` or
+any other kernel symbol. The kernel checks pointer overflow and requires the
+entire range to lie in a readable user mapping before reading it.
+
+The same saved exception frame is used for EL1 kernel threads and EL0 tasks.
+It contains the general registers, `ELR_EL1`, `SPSR_EL1`, `SP_EL0`, `ESR_EL1`,
+and `FAR_EL1`. A timer IRQ arriving while EL0 executes saves that frame and
+the scheduler can resume another thread before later returning with `eret` to
+EL0. `SYS_exit` marks the static user task terminated; it does not yet reclaim
+resources or create a process.
+
+Run the isolated tests with:
+
+```sh
+make run-user
+make run-user-protection
+```
+
+The first target demonstrates SVC output, timer preemption, register/local
+integrity, and exit. The second attempts to write kernel `.data`; the expected
+result is a `Data Abort from EL0`, termination of that task, and a surviving
+kernel. Invalid EL1 faults still use the existing fatal panic/halt policy.
+There is no ELF loader, executable file support, userspace shell, filesystem
+syscall, separate address space, fork, exec, libc, or dynamic linker yet.
 
 NimEdit 0.1 is entered with the shell command `edit <path>`. It is a kernel
 application, not a userspace process: it uses the common terminal and VFS APIs

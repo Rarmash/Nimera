@@ -49,6 +49,39 @@ SECTIONS
 		__stack_top = .;
 	}
 
+	/* Link-time embedded user image. These sections are mapped separately. */
+	.user.text : ALIGN(0x1000)
+	{
+		__user_text_start = .;
+		*(.user.text .user.text.*)
+		. = ALIGN(0x1000);
+		__user_text_end = .;
+	}
+
+	.user.rodata : ALIGN(0x1000)
+	{
+		__user_rodata_start = .;
+		*(.user.rodata .user.rodata.*)
+		. = ALIGN(0x1000);
+		__user_rodata_end = .;
+	}
+
+	.user.data : ALIGN(0x1000)
+	{
+		__user_data_start = .;
+		*(.user.data .user.data.*)
+		. = ALIGN(0x1000);
+		__user_data_end = .;
+	}
+
+	.user.bss (NOLOAD) : ALIGN(0x1000)
+	{
+		__user_stack_bottom = .;
+		*(.user.bss .user.bss.*)
+		. = ALIGN(0x1000);
+		__user_stack_top = .;
+	}
+
 	__kernel_end = .;
 
 	/DISCARD/ :

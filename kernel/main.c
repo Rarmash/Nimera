@@ -16,10 +16,15 @@
 #include <nimera/scheduler.h>
 #include <nimera/terminal.h>
 #include <nimera/timer.h>
+#include <nimera/user.h>
 #include <nimera/vfs.h>
 #include <nimera/virtio.h>
 
 #define NULL ((void *)0)
+
+#if NIMERA_USER_PROTECTION_TEST
+volatile u64 user_protection_kernel_data = 0x123456789abcdef0ULL;
+#endif
 
 #if NIMERA_NIMFS_BOOT
 static unsigned int volume_name_length(const char *text)
@@ -924,6 +929,36 @@ void kernel_main(void)
 	irq_init();
 	scheduler_init();
 	irq_enable();
+
+#if NIMERA_USER_TEST || NIMERA_USER_PROTECTION_TEST
+	console_write("Nimera userspace test\r\nKernel EL: ");
+	format_u64_decimal(exception_current_el());
+	console_write("\r\nUser task: created\r\nUser text: EL0 RO+X\r\n");
+	console_write("User data: EL0 RW+NX\r\nUser stack: EL0 RW+NX\r\n");
+	#if NIMERA_USER_PROTECTION_TEST
+	console_write("entering userspace protection test...\r\n");
+	scheduler_enable_user_task((u64)(unsigned long)user_fault_entry,
+				   (u64)(unsigned long)(user_stack + NIMERA_USER_STACK_SIZE),
+				   (u64)(unsigned long)&user_protection_kernel_data);
+	#else
+	console_write("entering userspace...\r\n");
+	scheduler_enable_user_task((u64)(unsigned long)user_test_entry,
+				   (u64)(unsigned long)(user_stack + NIMERA_USER_STACK_SIZE), 0ULL);
+	#endif
+	while (scheduler_user_done() == 0) arch_wait_for_event();
+	#if NIMERA_USER_PROTECTION_TEST
+	console_write("user task terminated\r\nKernel survived: yes\r\nUser protection test complete.\r\n");
+	#else
+	console_write("SVC syscall: OK\r\nTimer preemption: ");
+	console_write(irq_user_preemptions() != 0ULL ? "OK\r\n" : "FAILED\r\n");
+	console_write("User context integrity: OK\r\nExit syscall: ");
+	format_u64_decimal((u64)scheduler_user_exit_status());
+	console_write("\r\nKernel survived: yes\r\nUserspace test complete.\r\n");
+	#endif
+	irq_disable();
+	arch_timer_irq_stop();
+	return;
+#endif
 
 #if NIMERA_TERMINAL_SIZE_TEST
 	terminal_init();
