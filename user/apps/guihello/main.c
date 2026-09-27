@@ -67,6 +67,35 @@ static void decimal(char *buffer, unsigned long long value)
 	buffer[count] = '\0';
 }
 
+static void size_label(char *buffer, u64 width, u64 height)
+{
+	char first[24];
+	char second[24];
+	unsigned int index = 0U;
+	decimal(first, width);
+	decimal(second, height);
+	for (unsigned int i = 0U; first[i] != '\0'; ++i) buffer[index++] = first[i];
+	buffer[index++] = 'x';
+	for (unsigned int i = 0U; second[i] != '\0'; ++i) buffer[index++] = second[i];
+	buffer[index] = '\0';
+}
+
+static void redraw(u32 *pixels, const struct nimera_window_info *window,
+	char *pid_text)
+{
+	char dimensions[48];
+	fill_rect(pixels, window->stride_pixels, window->width, window->height,
+		0ULL, 0ULL, window->width, window->height, 0x00101828U);
+	fill_rect(pixels, window->stride_pixels, window->width, window->height,
+		24ULL, 32ULL, 18ULL, 18ULL, 0x00e0b040U);
+	draw_text(pixels, window, 72ULL, 42ULL, "Hello from EL0", 0x00ffffffU);
+	draw_text(pixels, window, 72ULL, 78ULL, "PID: ", 0x00ffffffU);
+	draw_text(pixels, window, 114ULL, 78ULL, pid_text, 0x00e0b040U);
+	size_label(dimensions, window->width, window->height);
+	draw_text(pixels, window, 72ULL, 114ULL, "SIZE: ", 0x00ffffffU);
+	draw_text(pixels, window, 156ULL, 114ULL, dimensions, 0x00e0b040U);
+}
+
 int main(int argc, char **argv)
 {
 	struct nimera_window_info window;
@@ -76,21 +105,15 @@ int main(int argc, char **argv)
 	u32 *pixels;
 	(void)argc; (void)argv;
 	handle = nimera_window_create(480U, 300U, "Hello from EL0", 14ULL,
-		NIMERA_WINDOW_CLOSABLE, &window);
+		NIMERA_WINDOW_CLOSABLE | NIMERA_WINDOW_RESIZABLE, &window);
 	if (handle < 0LL) {
 		const char message[] = "guihello: create failed\n";
 		(void)nimera_write_console(message, sizeof(message) - 1ULL);
 		return 1;
 	}
 	pixels = (u32 *)(unsigned long)window.client_address;
-	fill_rect(pixels, window.stride_pixels, window.width, window.height,
-		0ULL, 0ULL, window.width, window.height, 0x00101828U);
-	fill_rect(pixels, window.stride_pixels, window.width, window.height,
-		24ULL, 32ULL, 18ULL, 18ULL, 0x00e0b040U);
-	draw_text(pixels, &window, 72ULL, 42ULL, "Hello from EL0", 0x00ffffffU);
 	decimal(pid_text, (unsigned long long)nimera_getpid());
-	draw_text(pixels, &window, 72ULL, 78ULL, "PID: ", 0x00ffffffU);
-	draw_text(pixels, &window, 114ULL, 78ULL, pid_text, 0x00e0b040U);
+	redraw(pixels, &window, pid_text);
 	if (nimera_window_present((unsigned long long)handle, 0ULL, 0ULL,
 		window.width, window.height) != 0) {
 		const char message[] = "guihello: present failed\n";
@@ -104,6 +127,17 @@ int main(int argc, char **argv)
 			break;
 		}
 		if (event.type == NIMERA_WINDOW_EVENT_CLOSE_REQUEST) break;
+		if (event.type == NIMERA_WINDOW_EVENT_RESIZED) {
+			window.client_address = event.client_address;
+			window.width = event.client_width;
+			window.height = event.client_height;
+			window.stride_pixels = event.stride_pixels;
+			pixels = (u32 *)(unsigned long)window.client_address;
+			redraw(pixels, &window, pid_text);
+			(void)nimera_window_present((unsigned long long)handle, 0ULL, 0ULL,
+				window.width, window.height);
+			continue;
+		}
 		if (event.type == NIMERA_WINDOW_KEY &&
 			(event.ch == (u32)'q' || event.ch == (u32)'Q')) break;
 		if (event.type == NIMERA_WINDOW_POINTER_BUTTON_DOWN) {

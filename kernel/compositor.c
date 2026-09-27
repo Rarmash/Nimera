@@ -172,6 +172,11 @@ int compositor_remove(struct nimera_surface *surface)
 	return 0;
 }
 
+unsigned int compositor_surface_count(void)
+{
+	return surface_count;
+}
+
 struct nimera_surface *compositor_terminal_surface(void)
 {
 	return initialized == 0U ? (struct nimera_surface *)0 : &terminal_surface;

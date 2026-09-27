@@ -13,6 +13,7 @@ struct nimera_window_info {
 };
 
 #define NIMERA_WINDOW_CLOSABLE 0x00000001U
+#define NIMERA_WINDOW_RESIZABLE 0x00000002U
 
 enum nimera_window_event_type {
 	NIMERA_WINDOW_FOCUS_GAINED = 1U,
@@ -21,7 +22,8 @@ enum nimera_window_event_type {
 	NIMERA_WINDOW_POINTER_BUTTON_DOWN = 4U,
 	NIMERA_WINDOW_POINTER_BUTTON_UP = 5U,
 	NIMERA_WINDOW_KEY = 6U,
-	NIMERA_WINDOW_EVENT_CLOSE_REQUEST = 7U
+	NIMERA_WINDOW_EVENT_CLOSE_REQUEST = 7U,
+	NIMERA_WINDOW_EVENT_RESIZED = 8U
 };
 
 struct nimera_window_event {
@@ -33,6 +35,11 @@ struct nimera_window_event {
 	u32 reserved;
 	u64 x;
 	u64 y;
+	/* RESIZED supplies the only valid client mapping after the event. */
+	u64 client_address;
+	u64 client_width;
+	u64 client_height;
+	u64 stride_pixels;
 };
 
 #endif

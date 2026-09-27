@@ -600,13 +600,14 @@ window. The terminal renderer targets the terminal window's client surface, so
 its geometry is derived from that client area rather than from the full display.
 
 Pointer input supports hit testing, click-to-focus, title-bar dragging, a
-native close box for closable windows, and simple bounds clamping. Keyboard
+native close box for closable windows, eight-edge/corner client resizing, and
+simple bounds clamping. Keyboard
 input is delivered to the terminal only while that window is focused. The
 terminal remains non-closable; the kernel-owned About window uses direct kernel
 destruction, while userspace windows receive a `CLOSE_REQUEST` event and decide
 whether to destroy themselves. The window table is kernel-only and fixed-size;
-there are no resize/minimize/maximize controls, widgets, or general GUI
-framework. The target also runs an isolated geometry, z-order,
+there are no minimize/maximize controls, widgets, or general GUI framework.
+The target also runs an isolated geometry, z-order,
 hit-testing, focus, drag, restore, and destruction self-test before entering
 the shell. The About window is initially focused, so click the terminal window
 before typing into it.
@@ -646,8 +647,15 @@ window and exiting. Pressing `Q` remains supported. `make run-window-close`
 runs isolated close geometry, press/release, queue wakeup, ownership, cleanup,
 and repeated slot-reuse checks. Close requests use the existing bounded event
 queue; if it is full, the queue's existing oldest-event eviction policy is
-used, without a kernel panic. This milestone deliberately has no resize,
-minimize, maximize, force-close, widgets, toolkit, or general GUI framework.
+used, without a kernel panic. Resizable userspace windows opt in with
+`NIMERA_WINDOW_RESIZABLE`. `make run-window-resize` runs the isolated
+edge/corner hit-test, minimum-size, transactional remapping, `RESIZED` event,
+rollback, cleanup, and repeated-resize checks. During a resize the old client
+mapping remains authoritative until a new backing surface and mapping are
+ready; after the event, the application must use the supplied new client
+address, dimensions, and stride. The old mapping is then retired. There is no
+pixel preservation, resize/minimize/maximize framework, widget toolkit, or
+forced close.
 
 For the shell plus installed EL0 applications, prepare the development NimFS
 image once with `make run-elf-format` (stop QEMU after the format report), then

@@ -9,6 +9,7 @@
 int compositor_init(void);
 int compositor_add(struct nimera_surface *surface);
 int compositor_remove(struct nimera_surface *surface);
+unsigned int compositor_surface_count(void);
 struct nimera_surface *compositor_terminal_surface(void);
 void compositor_render_begin(struct nimera_surface *surface);
 void compositor_render_end(void);

@@ -71,7 +71,7 @@ static long long syscall_window_create(struct irq_frame *frame)
 	if (length != 0ULL && copy_from_user(title, frame->x[2], length) != 0)
 		return NIMERA_NERR_INVALID;
 	title[length] = '\0';
-	if ((frame->x[5] & ~(u64)NIMERA_WINDOW_CLOSABLE) != 0ULL)
+	if ((frame->x[5] & ~(u64)(NIMERA_WINDOW_CLOSABLE | NIMERA_WINDOW_RESIZABLE)) != 0ULL)
 		return NIMERA_NERR_INVALID;
 	if (window_manager_create_user(process_current(), title, frame->x[0], frame->x[1],
 		(u32)frame->x[5], &info) != 0)
