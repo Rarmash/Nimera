@@ -10,6 +10,7 @@
 #include <nimera/terminal.h>
 #include <nimera/vfs.h>
 #include <nimera/abi/terminal.h>
+#include <nimera/window.h>
 
 #define USER_IO_CHUNK 512ULL
 
@@ -58,6 +59,37 @@ static long long syscall_write_console(struct irq_frame *frame)
 		offset += count;
 	}
 	return (long long)length;
+}
+
+static long long syscall_window_create(struct irq_frame *frame)
+{
+	char title[WINDOW_TITLE_MAX + 1U];
+	struct nimera_window_info info;
+	u64 length = frame->x[3];
+	if (length > WINDOW_TITLE_MAX || mmu_user_writable_range(frame->x[4], sizeof(info)) == 0)
+		return NIMERA_NERR_INVALID;
+	if (length != 0ULL && copy_from_user(title, frame->x[2], length) != 0)
+		return NIMERA_NERR_INVALID;
+	title[length] = '\0';
+	if (window_manager_create_user(process_current(), title, frame->x[0], frame->x[1], &info) != 0)
+		return NIMERA_NERR_NO_MEMORY;
+	if (copy_to_user(frame->x[4], (const char *)(const void *)&info, sizeof(info)) != 0) {
+		(void)window_manager_destroy_user(process_current(), info.handle);
+		return NIMERA_NERR_INVALID;
+	}
+	return (long long)info.handle;
+}
+
+static long long syscall_window_read_event(struct irq_frame *frame)
+{
+	struct nimera_window_event event;
+	if (mmu_user_writable_range(frame->x[1], sizeof(event)) == 0)
+		return NIMERA_NERR_INVALID;
+	if (window_manager_read_user_event(process_current(), frame->x[0], &event) != 0)
+		return NIMERA_NERR_BAD_HANDLE;
+	if (copy_to_user(frame->x[1], (const char *)(const void *)&event, sizeof(event)) != 0)
+		return NIMERA_NERR_INVALID;
+	return 0LL;
 }
 
 static long long syscall_open(struct irq_frame *frame)
@@ -223,6 +255,17 @@ struct irq_frame *syscall_handle(struct irq_frame *frame)
 		if (terminal_allowed() == 0) frame->x[0] = (u64)NIMERA_NERR_ACCESS;
 		else { terminal_end_update(); frame->x[0] = 0ULL; }
 		return frame;
+	case NIMERA_SYS_WINDOW_CREATE:
+		frame->x[0] = (u64)syscall_window_create(frame); return frame;
+	case NIMERA_SYS_WINDOW_DESTROY:
+		frame->x[0] = window_manager_destroy_user(process_current(), frame->x[0]) == 0 ?
+			(u64)0LL : (u64)NIMERA_NERR_BAD_HANDLE; return frame;
+	case NIMERA_SYS_WINDOW_PRESENT:
+		frame->x[0] = window_manager_present_user(process_current(), frame->x[0],
+			frame->x[1], frame->x[2], frame->x[3], frame->x[4]) == 0 ?
+			(u64)0LL : (u64)NIMERA_NERR_INVALID; return frame;
+	case NIMERA_SYS_WINDOW_READ_EVENT:
+		frame->x[0] = (u64)syscall_window_read_event(frame); return frame;
 	case NIMERA_SYS_MEM_ALLOC:
 		frame->x[0] = (u64)elf_user_alloc(frame->x[0]); return frame;
 	case NIMERA_SYS_MEM_FREE:

@@ -10,6 +10,7 @@
 #include <nimera/terminal.h>
 #include <nimera/user.h>
 #include <nimera/vfs.h>
+#include <nimera/window.h>
 
 #define ELF_USER_BASE 0x10000000ULL
 #define ELF_USER_LIMIT 0x20000000ULL
@@ -508,6 +509,7 @@ void elf_user_task_finished(void)
 void process_mark_exit(struct process *process, long long status)
 {
 	if (process == (struct process *)0) return;
+	window_manager_destroy_process_windows(process);
 	if (process->terminal_owner != 0U) terminal_cancel_update();
 	process->exit_status = status;
 	/* Endpoint references must disappear at exit so readers can observe EOF
@@ -885,6 +887,10 @@ int elf_install_test_payload(struct vfs_node *root)
 	extern const unsigned char _binary_build_user_app_pipetest_elf_end[];
 	extern const unsigned char _binary_build_user_app_jobtest_elf_start[];
 	extern const unsigned char _binary_build_user_app_jobtest_elf_end[];
+	#if NIMERA_USER_GUI_TEST
+	extern const unsigned char _binary_build_user_app_guihello_elf_start[];
+	extern const unsigned char _binary_build_user_app_guihello_elf_end[];
+	#endif
 	#if NIMERA_TERMINAL_APP_TEST || NIMERA_TERMINAL_FAULT_TEST || NIMERA_TERMINAL_CHECK_TEST
 	extern const unsigned char _binary_build_user_app_keytest_elf_start[];
 	extern const unsigned char _binary_build_user_app_keytest_elf_end[];
@@ -933,6 +939,10 @@ int elf_install_test_payload(struct vfs_node *root)
 			 _binary_build_user_app_pipetest_elf_end},
 			{"/apps/jobtest", _binary_build_user_app_jobtest_elf_start,
 			 _binary_build_user_app_jobtest_elf_end}
+			#if NIMERA_USER_GUI_TEST
+			,{"/apps/guihello", _binary_build_user_app_guihello_elf_start,
+			 _binary_build_user_app_guihello_elf_end}
+			#endif
 			#if NIMERA_TERMINAL_APP_TEST || NIMERA_TERMINAL_FAULT_TEST || NIMERA_TERMINAL_CHECK_TEST
 			,{"/apps/keytest", _binary_build_user_app_keytest_elf_start,
 			 _binary_build_user_app_keytest_elf_end},

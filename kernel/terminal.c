@@ -385,11 +385,7 @@ struct key_event terminal_read_key(void)
 	if (terminal_framebuffer_active() != 0 && input_hardware_available() != 0) {
 		for (;;) {
 			while (input_try_get_pointer_event(&pointer) != 0)
-#if NIMERA_WINDOW_TEST
 				window_manager_handle_pointer_event(&pointer);
-#else
-				compositor_handle_pointer_event(&pointer);
-#endif
 			if (input_try_get_event(&event) != 0) {
 #if NIMERA_WINDOW_TEST
 				if (window_manager_terminal_focused() != 0) return event;

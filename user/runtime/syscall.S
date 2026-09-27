@@ -75,6 +75,26 @@ nimera_terminal_end_update:
 	mov x8, #24
 	svc #0
 	ret
+	.global nimera_window_create
+nimera_window_create:
+	mov x8, #25
+	svc #0
+	ret
+	.global nimera_window_destroy
+nimera_window_destroy:
+	mov x8, #26
+	svc #0
+	ret
+	.global nimera_window_present
+nimera_window_present:
+	mov x8, #27
+	svc #0
+	ret
+	.global nimera_window_read_event
+nimera_window_read_event:
+	mov x8, #28
+	svc #0
+	ret
 	.global nimera_alloc
 nimera_alloc:
 	mov x8, #13

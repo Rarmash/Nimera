@@ -1,7 +1,13 @@
 #include <nimera/compositor.h>
 #include <nimera/console.h>
 #include <nimera/display.h>
+#include <nimera/format.h>
 #include <nimera/graphics.h>
+#include <nimera/input.h>
+#include <nimera/mmu.h>
+#include <nimera/pmm.h>
+#include <nimera/process.h>
+#include <nimera/scheduler.h>
 #include <nimera/window.h>
 
 #define WINDOW_BACKGROUND 0x00101828U
@@ -20,6 +26,51 @@ static struct nimera_window *focused_window;
 static struct nimera_window *drag_window;
 static long long drag_offset_x;
 static long long drag_offset_y;
+
+static struct nimera_window *user_window(struct process *owner, u64 handle)
+{
+	for (unsigned int index = 0U; index < window_count; ++index)
+		if (windows[index].visible != 0U && windows[index].user_owned != 0U &&
+			windows[index].owner == owner && windows[index].id == handle)
+			return &windows[index];
+	return (struct nimera_window *)0;
+}
+
+static void queue_event(struct nimera_window *window,
+			const struct nimera_window_event *event)
+{
+	unsigned int next;
+	if (window == (struct nimera_window *)0 || window->user_owned == 0U) return;
+	next = (window->event_write + 1U) % WINDOW_EVENT_QUEUE_CAPACITY;
+	if (next == window->event_read) {
+		/* Pointer motion is disposable; never panic on a full user queue. */
+		if (event->type == NIMERA_WINDOW_POINTER_MOVE) return;
+		window->event_read = (window->event_read + 1U) % WINDOW_EVENT_QUEUE_CAPACITY;
+	}
+	window->events[window->event_write] = *event;
+	window->event_write = next;
+	if (window->owner->thread_index < scheduler_thread_count())
+		scheduler_wake_thread(window->owner->thread_index);
+}
+
+static int pop_event(struct nimera_window *window,
+			struct nimera_window_event *event)
+{
+	if (window->event_read == window->event_write) return 0;
+	*event = window->events[window->event_read];
+	window->event_read = (window->event_read + 1U) % WINDOW_EVENT_QUEUE_CAPACITY;
+	return 1;
+}
+
+static void unmap_user_client(struct nimera_window *window)
+{
+	if (window->owner == (struct process *)0) return;
+	for (u64 page = 0ULL; page < window->user_map_pages; ++page)
+		(void)mmu_unmap_user_page_in(&window->owner->address_space,
+			window->user_address + page * NIMERA_PAGE_SIZE);
+	window->user_address = 0ULL;
+	window->user_map_pages = 0ULL;
+}
 
 static int window_test_line(const char *name, int condition)
 {
@@ -122,14 +173,21 @@ struct nimera_window *window_create(const char *title, u64 width, u64 height,
 {
 	struct nimera_window *window;
 	if (initialized == 0U || window_count == WINDOW_MANAGER_MAX_WINDOWS ||
-		width < WINDOW_BORDER * 2ULL || height <= WINDOW_TITLE_HEIGHT)
+		width < WINDOW_BORDER * 2ULL || height <= WINDOW_TITLE_HEIGHT) {
 		return (struct nimera_window *)0;
+	}
 	window = &windows[window_count++];
 	window->id = next_id++;
 	window->width = width;
 	window->height = height;
 	window->visible = 1U;
 	window->focused = 0U;
+	window->owner = (struct process *)0;
+	window->user_address = 0ULL;
+	window->user_map_pages = 0ULL;
+	window->user_owned = 0U;
+	window->event_read = 0U;
+	window->event_write = 0U;
 	window->z_order = ++z_sequence;
 	copy_title(window->title, title);
 	if (x < 0LL) x = 0LL;
@@ -166,11 +224,15 @@ struct nimera_window *window_create(const char *title, u64 width, u64 height,
 void window_destroy(struct nimera_window *window)
 {
 	if (window == (struct nimera_window *)0 || window->visible == 0U) return;
+	unmap_user_client(window);
 	(void)compositor_remove(&window->client_surface);
 	(void)compositor_remove(&window->frame_surface);
 	surface_destroy(&window->client_surface);
 	surface_destroy(&window->frame_surface);
 	window->visible = 0U;
+	window->user_owned = 0U;
+	window->owner = (struct process *)0;
+	if (window_count != 0U) --window_count;
 	if (focused_window == window) focused_window = terminal_window;
 	if (drag_window == window) drag_window = (struct nimera_window *)0;
 	compositor_mark_dirty(window->x, window->y, window->width, window->height);
@@ -187,10 +249,15 @@ void window_show(struct nimera_window *window, unsigned int visible)
 
 void window_focus(struct nimera_window *window)
 {
+	struct nimera_window *old = focused_window;
 	if (window == (struct nimera_window *)0 || window->visible == 0U) return;
 	for (unsigned int i = 0U; i < window_count; ++i) windows[i].focused = 0U;
 	window->focused = 1U;
 	focused_window = window;
+	if (old != window && old != (struct nimera_window *)0 && old->user_owned != 0U)
+		queue_event(old, &(struct nimera_window_event){.type = NIMERA_WINDOW_FOCUS_LOST});
+	if (old != window && window->user_owned != 0U)
+		queue_event(window, &(struct nimera_window_event){.type = NIMERA_WINDOW_FOCUS_GAINED});
 	window->z_order = ++z_sequence;
 	window->frame_surface.z_order = window->z_order * 2;
 	window->client_surface.z_order = window->z_order * 2 + 1;
@@ -255,13 +322,132 @@ void window_manager_handle_pointer_event(const struct pointer_event *event)
 			drag_window = window;
 			drag_offset_x = (long long)event->x - window->x;
 			drag_offset_y = (long long)event->y - window->y;
+		} else if (window->user_owned != 0U) {
+			queue_event(window, &(struct nimera_window_event){
+				.type = NIMERA_WINDOW_POINTER_BUTTON_DOWN,
+				.button = event->button,
+				.x = event->x - (u32)window->client_surface.x,
+				.y = event->y - (u32)window->client_surface.y});
 		}
 	} else if (event->kind == POINTER_MOVE && drag_window != (struct nimera_window *)0) {
 		window_move(drag_window, (long long)event->x - drag_offset_x,
 				   (long long)event->y - drag_offset_y);
+	} else if (event->kind == POINTER_MOVE && focused_window != (struct nimera_window *)0 &&
+		focused_window->user_owned != 0U &&
+		window_hit_test(focused_window, event->x, event->y) == WINDOW_HIT_CLIENT) {
+		queue_event(focused_window, &(struct nimera_window_event){
+			.type = NIMERA_WINDOW_POINTER_MOVE,
+			.x = event->x - (u32)focused_window->client_surface.x,
+			.y = event->y - (u32)focused_window->client_surface.y,
+			.button = event->buttons});
 	} else if (event->kind == POINTER_BUTTON_UP && event->button == POINTER_BUTTON_LEFT) {
+		if (drag_window == (struct nimera_window *)0 && focused_window != (struct nimera_window *)0 &&
+			focused_window->user_owned != 0U &&
+			window_hit_test(focused_window, event->x, event->y) == WINDOW_HIT_CLIENT)
+			queue_event(focused_window, &(struct nimera_window_event){
+				.type = NIMERA_WINDOW_POINTER_BUTTON_UP,
+				.button = event->button,
+				.x = event->x - (u32)focused_window->client_surface.x,
+				.y = event->y - (u32)focused_window->client_surface.y});
 		drag_window = (struct nimera_window *)0;
 	}
+}
+
+static void route_pending_input(void)
+{
+	struct pointer_event pointer;
+	struct key_event key;
+	while (input_try_get_pointer_event(&pointer) != 0)
+		window_manager_handle_pointer_event(&pointer);
+	while (input_try_get_event(&key) != 0)
+		if (focused_window != (struct nimera_window *)0 && focused_window->user_owned != 0U)
+			queue_event(focused_window, &(struct nimera_window_event){
+				.type = NIMERA_WINDOW_KEY, .key_code = key.code,
+				.ch = (u32)(unsigned char)key.ch, .modifiers = key.ctrl});
+}
+
+int window_manager_create_user(struct process *owner, const char *title,
+	u64 width, u64 height,
+				       struct nimera_window_info *info)
+{
+	struct nimera_window *window;
+	if (owner == (struct process *)0 || info == (struct nimera_window_info *)0 ||
+		width == 0ULL || height == 0ULL || width > ~0ULL / height ||
+		width * height > ~0ULL / 4ULL ||
+		width > ~0ULL - WINDOW_BORDER * 2ULL ||
+		height > ~0ULL - WINDOW_TITLE_HEIGHT - WINDOW_BORDER) return -1;
+	window = window_create(title, width + WINDOW_BORDER * 2ULL,
+		height + WINDOW_TITLE_HEIGHT + WINDOW_BORDER,
+		(long long)(display_width() / 3ULL), 80LL);
+	if (window == (struct nimera_window *)0) {
+		return -1;
+	}
+	window->owner = owner;
+	window->user_owned = 1U;
+	window->user_address = WINDOW_USER_MAP_BASE +
+		(u64)(window - windows) * WINDOW_USER_MAP_STRIDE;
+	window->user_map_pages = window->client_surface.page_count;
+	if (window->user_map_pages * NIMERA_PAGE_SIZE > WINDOW_USER_MAP_STRIDE) {
+		window_destroy(window); return -1;
+	}
+	for (u64 page = 0ULL; page < window->user_map_pages; ++page)
+		if (mmu_map_user_page_in(&owner->address_space,
+			window->user_address + page * NIMERA_PAGE_SIZE,
+			(u64)(unsigned long)window->client_surface.pixels + page * NIMERA_PAGE_SIZE,
+			MMU_USER_READ | MMU_USER_WRITE) != 0) {
+			window_destroy(window); return -1;
+		}
+	window_focus(window);
+	info->handle = window->id;
+	info->client_address = window->user_address;
+	info->stride_pixels = window->client_surface.stride;
+	info->width = window->client_surface.width;
+	info->height = window->client_surface.height;
+	return 0;
+}
+
+int window_manager_destroy_user(struct process *owner, u64 handle)
+{
+	struct nimera_window *window = user_window(owner, handle);
+	if (window == (struct nimera_window *)0) return -1;
+	window_destroy(window);
+	if (terminal_window != (struct nimera_window *)0) window_focus(terminal_window);
+	return 0;
+}
+
+int window_manager_present_user(struct process *owner, u64 handle,
+					u64 x, u64 y, u64 width, u64 height)
+{
+	struct nimera_window *window = user_window(owner, handle);
+	if (window == (struct nimera_window *)0 || x > window->client_surface.width ||
+		y > window->client_surface.height || width > window->client_surface.width - x ||
+		height > window->client_surface.height - y) return -1;
+	compositor_mark_dirty(window->client_surface.x + (long long)x,
+		window->client_surface.y + (long long)y, width, height);
+	compositor_present();
+	return 0;
+}
+
+int window_manager_read_user_event(struct process *owner, u64 handle,
+					struct nimera_window_event *event)
+{
+	struct nimera_window *window = user_window(owner, handle);
+	if (window == (struct nimera_window *)0 || event == (struct nimera_window_event *)0)
+		return -1;
+	for (;;) {
+		route_pending_input();
+		if (pop_event(window, event) != 0) return 0;
+		input_wait_for_activity();
+	}
+}
+
+void window_manager_destroy_process_windows(struct process *owner)
+{
+	for (unsigned int index = 0U; index < WINDOW_MANAGER_MAX_WINDOWS; ++index)
+		if (windows[index].visible != 0U && windows[index].owner == owner)
+			window_destroy(&windows[index]);
+	if (terminal_window != (struct nimera_window *)0)
+		window_focus(terminal_window);
 }
 
 struct nimera_surface *window_manager_terminal_client_surface(void)

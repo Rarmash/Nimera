@@ -614,6 +614,31 @@ translation, navigation events, and the IRQ wakeup path.
 framebuffer backend. It exercises printable characters, control operations,
 cursor visibility, clearing, and scrolling in an isolated build.
 
+## First userspace GUI window ABI
+
+The first small userspace window ABI is now available in the isolated
+`make run-user-gui` target. `/apps/guihello` creates one 480x300 window, draws
+into its shared client framebuffer, presents it, and waits for events. The
+kernel keeps ownership of the decorated frame, title bar, focus, z-order, and
+title-bar dragging; the application owns only its client pixels and receives
+local client-area pointer/key events through the public ABI.
+
+The client receives an opaque window handle and a bounded title. Its pixel
+buffer is mapped into its EL0 address space as writable, non-executable memory
+at a separate window mapping range. It has the same B8G8R8X8 format as the
+display, so a present call only validates a rectangle, marks it dirty, and
+flushes the compositor batch. Each window has a small bounded event queue;
+reading an empty queue blocks through the existing scheduler-aware input wait
+path rather than spinning. Handles and mappings are checked against the owning
+process and are removed automatically when that process exits or faults.
+
+To create the development image with the GUI payload once, run
+`make run-user-gui-format`, stop QEMU after the format report, then run
+`make run-user-gui`. The latter mounts the existing image and does not format
+it. Pressing `Q` in the focused GUI window exits the demo and returns focus to
+the terminal. This milestone deliberately has no widgets, resize protocol,
+close protocol, toolkit, or general GUI framework.
+
 For the shell plus installed EL0 applications, prepare the development NimFS
 image once with `make run-elf-format` (stop QEMU after the format report), then
 use `make run-fb-terminal`. The image is not reformatted by the framebuffer
@@ -1316,8 +1341,10 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `kernel/compositor.c` and `include/nimera/compositor.h` — clipped opaque
   composition, dirty-region tracking, background, and pointer overlay.
 - `kernel/window.c` and `include/nimera/window.h` — fixed kernel-owned window
-  table, decorated frame/client surfaces, focus, z-order, hit testing, and
-  title-bar dragging for the `run-windows` development target.
+  table, decorated frame/client surfaces, focus, z-order, hit testing,
+  title-bar dragging, and the minimal userspace-window ownership/mapping path.
+- `include/nimera/abi/window.h` — public opaque-handle, shared-client-buffer,
+  and bounded window-event ABI shared by the kernel and EL0 applications.
 - `kernel/graphics.c` — bounds-safe software drawing primitives, Nimera Mono
   rendering, and selectable surface/display drawing targets.
 - `include/nimera/utf8.h` — minimal streaming UTF-8 decoder API.
@@ -1336,8 +1363,9 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   it contains no VirtIO queue knowledge.
 - `user/runtime/` — the tiny freestanding user entry point and syscall stubs.
 - `user/apps/` — separately linked `hello`, `cat`, file-syscall, `keytest`,
-  `termcheck`, userspace `edit`, and filesystem utility ELF programs; artifacts
-  are kept outside the source tree in `build-user-app/`.
+  `termcheck`, userspace `edit`, filesystem utility ELF programs, and the
+  `guihello` shared-framebuffer demo; artifacts are kept outside the source
+  tree in `build-user-app/`.
 - `user/apps/edit/` — the standalone NimEdit model and renderer. It includes
   only the public userspace ABI and no kernel headers.
 - `user/runtime/fsutil.c` — tiny shared output/error helpers for filesystem
@@ -1410,7 +1438,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `disk-reset`, `run-terminal-app-format`, `run-terminal-app`,
   `run-terminal-fault`, `run-user-terminal`, `run-graphics`,
   `run-fb-terminal`, `run-fb-terminal-test`, `run-compositor`, `run-windows`,
-  `run-utf8-test`, and `clean`. Test builds use
+  `run-user-gui-format`, `run-user-gui`, `run-utf8-test`, and `clean`. Test builds use
   separate directories so their compile-time paths cannot contaminate `make
   run`; `run-jobs` uses `build-jobs/` for the background-job test.
 - `README.md` — project status, workflow, and design notes.

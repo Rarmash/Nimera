@@ -34,6 +34,7 @@ TERMINAL_SIZE_NO_RESPONSE ?= 0
 EDITOR_TEST ?= 0
 USER_EDITOR_TEST ?= 0
 USER_EDITOR_SELF_TEST ?= 0
+USER_GUI_TEST ?= 0
 ELF_INSTALL_TEST ?= 0
 ELF_RUN_TEST ?= 0
 BLOCK_TEST ?= 0
@@ -95,6 +96,7 @@ USER_PROCFAULT_ELF := $(USER_APP_BUILD_DIR)/procfault.elf
 USER_UPPER_ELF := $(USER_APP_BUILD_DIR)/upper.elf
 USER_PIPETEST_ELF := $(USER_APP_BUILD_DIR)/pipetest.elf
 USER_JOBTEST_ELF := $(USER_APP_BUILD_DIR)/jobtest.elf
+USER_GUIHELLO_ELF := $(USER_APP_BUILD_DIR)/guihello.elf
 USER_CC := $(LLVM_PREFIX)/bin/clang
 USER_LD := $(LLD_PREFIX)/bin/ld.lld
 USER_OBJCOPY := $(LLVM_PREFIX)/bin/llvm-objcopy
@@ -159,6 +161,7 @@ CFLAGS := \
 	-DNIMERA_WINDOW_TEST=$(WINDOW_TEST) \
 	-DNIMERA_RENDER_BATCHING=$(RENDER_BATCHING) \
 	-DNIMERA_RENDER_BATCHING_TEST=$(RENDER_BATCHING_TEST) \
+	-DNIMERA_USER_GUI_TEST=$(USER_GUI_TEST) \
 	-DNIMERA_TERMINAL_APP_TEST=$(TERMINAL_APP_TEST) \
 	-DNIMERA_TERMINAL_FAULT_TEST=$(TERMINAL_FAULT_TEST) \
 	-DNIMERA_TERMINAL_CHECK_TEST=$(TERMINAL_CHECK_TEST) \
@@ -186,13 +189,16 @@ OBJECTS += $(BUILD_DIR)/pidtest-payload.o $(BUILD_DIR)/proctest-payload.o $(BUIL
 OBJECTS += $(BUILD_DIR)/upper-payload.o
 OBJECTS += $(BUILD_DIR)/pipetest-payload.o
 OBJECTS += $(BUILD_DIR)/jobtest-payload.o
+ifneq ($(USER_GUI_TEST),0)
+OBJECTS += $(BUILD_DIR)/guihello-payload.o
+endif
 ifneq ($(TERMINAL_APP_TEST)$(TERMINAL_FAULT_TEST)$(TERMINAL_CHECK_TEST),000)
 OBJECTS += $(BUILD_DIR)/keytest-payload.o $(BUILD_DIR)/faulttest-payload.o
 OBJECTS += $(BUILD_DIR)/termcheck-payload.o
 endif
 endif
 
-.PHONY: build user-app run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block run-user run-user-protection run-user-terminal run-user-editor-format run-user-editor run-user-editor-test run-user-utils run-elf-format run-elf run-elf-test run-user-files run-commands run-terminal-app run-terminal-app-format run-terminal-fault run-processes run-pipes run-redirection run-jobs run-fb-terminal run-fb-terminal-test run-native-input-test run-utf8-test run-compositor run-windows run-render-batching nimfs-elf-disk-create nimfs-elf-disk-reset disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
+.PHONY: build user-app run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block run-user run-user-protection run-user-terminal run-user-editor-format run-user-editor run-user-editor-test run-user-utils run-elf-format run-elf run-elf-test run-user-files run-commands run-terminal-app run-terminal-app-format run-terminal-fault run-processes run-pipes run-redirection run-jobs run-fb-terminal run-fb-terminal-test run-native-input-test run-utf8-test run-compositor run-windows run-render-batching run-user-gui-format run-user-gui nimfs-elf-disk-create nimfs-elf-disk-reset disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
 
 build: $(ELF)
 
@@ -306,10 +312,19 @@ $(BUILD_DIR)/pipetest-payload.o: $(USER_PIPETEST_ELF) | $(BUILD_DIR)/.dir
 $(BUILD_DIR)/jobtest-payload.o: $(USER_JOBTEST_ELF) | $(BUILD_DIR)/.dir
 	$(USER_OBJCOPY) -I binary -O elf64-littleaarch64 -B aarch64 $< $@
 
+$(BUILD_DIR)/guihello-payload.o: $(USER_GUIHELLO_ELF) | $(BUILD_DIR)/.dir
+	$(USER_OBJCOPY) -I binary -O elf64-littleaarch64 -B aarch64 $< $@
+
 $(BUILD_DIR)/termcheck-payload.o: $(USER_TERMCHECK_ELF) | $(BUILD_DIR)/.dir
 	$(USER_OBJCOPY) -I binary -O elf64-littleaarch64 -B aarch64 $< $@
 
-user-app: $(USER_APP_ELF) $(USER_CAT_ELF) $(USER_FILETEST_ELF) $(USER_KEYTEST_ELF) $(USER_FAULTTEST_ELF) $(USER_TERMCHECK_ELF) $(USER_EDIT_ELF) $(USER_LS_ELF) $(USER_MKDIR_ELF) $(USER_TOUCH_ELF) $(USER_RM_ELF) $(USER_RMDIR_ELF) $(USER_MV_ELF) $(USER_PWD_ELF) $(USER_WRITE_ELF) $(USER_APPEND_ELF) $(USER_PIDTEST_ELF) $(USER_PROCTEST_ELF) $(USER_PROCFAULT_ELF) $(USER_UPPER_ELF) $(USER_PIPETEST_ELF) $(USER_JOBTEST_ELF)
+user-app: $(USER_APP_ELF) $(USER_CAT_ELF) $(USER_FILETEST_ELF) $(USER_KEYTEST_ELF) $(USER_FAULTTEST_ELF) $(USER_TERMCHECK_ELF) $(USER_EDIT_ELF) $(USER_LS_ELF) $(USER_MKDIR_ELF) $(USER_TOUCH_ELF) $(USER_RM_ELF) $(USER_RMDIR_ELF) $(USER_MV_ELF) $(USER_PWD_ELF) $(USER_WRITE_ELF) $(USER_APPEND_ELF) $(USER_PIDTEST_ELF) $(USER_PROCTEST_ELF) $(USER_PROCFAULT_ELF) $(USER_UPPER_ELF) $(USER_PIPETEST_ELF) $(USER_JOBTEST_ELF) $(USER_GUIHELLO_ELF)
+
+$(USER_GUIHELLO_ELF): $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/guihello.o $(USER_APP_BUILD_DIR)/syscall.o user/apps/guihello/linker.ld | $(USER_APP_BUILD_DIR)/.dir
+	$(USER_LD) -T user/apps/guihello/linker.ld -m aarch64elf -e _start -z max-page-size=0x1000 -Map=$(USER_APP_BUILD_DIR)/guihello.map -o $@ $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/guihello.o $(USER_APP_BUILD_DIR)/syscall.o
+
+$(USER_APP_BUILD_DIR)/guihello.o: user/apps/guihello/main.c user/include/nimera/user.h include/nimera/abi/window.h | $(USER_APP_BUILD_DIR)/.dir
+	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -mgeneral-regs-only -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iuser/include -Iinclude -c $< -o $@
 
 $(USER_APP_ELF): $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/hello.o $(USER_APP_BUILD_DIR)/syscall.o user/apps/hello/linker.ld | $(USER_APP_BUILD_DIR)/.dir
 	$(USER_LD) -T user/apps/hello/linker.ld -m aarch64elf -e _start -z max-page-size=0x1000 -Map=$(USER_APP_BUILD_DIR)/hello.map -o $@ $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/hello.o $(USER_APP_BUILD_DIR)/syscall.o
@@ -498,6 +513,16 @@ run-windows: nimfs-elf-disk-create user-app
 	rm -rf build-windows
 	$(MAKE) BUILD_DIR=build-windows FRAMEBUFFER_TERMINAL=1 WINDOW_TEST=1 NIMFS_BOOT=1 ELF_INSTALL_TEST=1 TERMINAL_SIZE_NO_RESPONSE=1 BLOCK_TEST=0 build
 	$(QEMU) -machine $(QEMU_MACHINE) -m $(QEMU_MEMORY) -cpu cortex-a72 -display cocoa -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimera-disk -device virtio-blk-device,drive=nimera-disk -device virtio-gpu-device -device virtio-keyboard-device,display=default -device virtio-tablet-device,display=default -device loader,file=build-windows/baremetal-aarch64.elf,cpu-num=0
+
+run-user-gui-format: nimfs-elf-disk-reset user-app
+	rm -rf build-user-gui-format
+	$(MAKE) BUILD_DIR=build-user-gui-format FRAMEBUFFER_TERMINAL=0 NIMFS_FORMAT_TEST=1 NIMFS_BOOT=0 ELF_INSTALL_TEST=1 USER_GUI_TEST=1 BLOCK_TEST=0 build
+	$(QEMU) -machine $(QEMU_MACHINE) -m $(QEMU_MEMORY) -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimera-disk -device virtio-blk-device,drive=nimera-disk -device loader,file=build-user-gui-format/baremetal-aarch64.elf,cpu-num=0
+
+run-user-gui: nimfs-elf-disk-create user-app
+	rm -rf build-user-gui
+	$(MAKE) BUILD_DIR=build-user-gui FRAMEBUFFER_TERMINAL=1 WINDOW_TEST=1 NIMFS_BOOT=1 ELF_INSTALL_TEST=1 USER_GUI_TEST=1 TERMINAL_SIZE_NO_RESPONSE=1 BLOCK_TEST=0 build
+	$(QEMU) -machine $(QEMU_MACHINE) -m $(QEMU_MEMORY) -cpu cortex-a72 -display cocoa -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimera-disk -device virtio-blk-device,drive=nimera-disk -device virtio-gpu-device -device virtio-keyboard-device,display=default -device virtio-tablet-device,display=default -device loader,file=build-user-gui/baremetal-aarch64.elf,cpu-num=0
 
 run-render-batching: disk-create
 	rm -rf build-render-batching
@@ -949,4 +974,4 @@ run-mounts: nimfs-root-reset nimfs-data-reset
 
 
 clean:
-	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-user build-user-protection build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume build-elf build-elf-format build-elf-test build-elf-test2 build-user-files build-user-format build-shell-user build-shell-terminal build-commands build-command-format build-terminal-app build-terminal-format build-terminal-fault build-user-terminal build-user-terminal-format build-user-editor build-user-editor-format build-user-editor-test build-user-editor-shell build-user-utils build-processes build-pipes build-redirection build-jobs build-jobs-interactive build-graphics build-fb-terminal build-fb-terminal-test build-compositor build-windows build-render-batching build-render-before build-native-input-test build-utf8-test build-user-app build-user-app-test build-utils build-utils-format
+	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-user build-user-protection build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume build-elf build-elf-format build-elf-test build-elf-test2 build-user-files build-user-format build-shell-user build-shell-terminal build-commands build-command-format build-terminal-app build-terminal-format build-terminal-fault build-user-terminal build-user-terminal-format build-user-editor build-user-editor-format build-user-editor-test build-user-editor-shell build-user-utils build-processes build-pipes build-redirection build-jobs build-jobs-interactive build-graphics build-fb-terminal build-fb-terminal-test build-compositor build-windows build-render-batching build-render-before build-native-input-test build-utf8-test build-user-app build-user-app-test build-user-gui build-user-gui-format build-gui-format build-utils build-utils-format
