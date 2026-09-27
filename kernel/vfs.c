@@ -414,12 +414,18 @@ enum vfs_error vfs_create_file(struct vfs_node *cwd, const char *path,
 }
 
 enum vfs_error vfs_read(struct vfs_node *file, char *buffer, u64 capacity,
-				u64 *size)
+			 u64 *size)
 {
 	if (file == (struct vfs_node *)0) {
 		return VFS_NOT_FOUND;
 	}
 	return file->operations->read(file, buffer, capacity, size);
+}
+
+enum vfs_error vfs_get_size(struct vfs_node *file, u64 *size)
+{
+	enum vfs_error error = vfs_read(file, (char *)0, 0ULL, size);
+	return error == VFS_TOO_LARGE || error == VFS_OK ? VFS_OK : error;
 }
 
 static int vfs_current_or_ancestor(struct vfs_node *node,

@@ -49,6 +49,7 @@ struct irq_frame *scheduler_terminate_current(struct irq_frame *frame);
 int scheduler_user_done(void);
 long long scheduler_user_exit_status(void);
 void scheduler_set_user_exit_status(long long status);
+void scheduler_release_user_task(void);
 __attribute__((noreturn)) void thread_entry_returned(void);
 
 #endif

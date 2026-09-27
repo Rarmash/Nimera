@@ -85,7 +85,8 @@ enum vfs_error vfs_lookup(struct vfs_node *directory, const char *name,
 enum vfs_error vfs_readdir(struct vfs_node *directory, unsigned int index,
 				   struct vfs_node **result);
 enum vfs_error vfs_read(struct vfs_node *file, char *buffer, u64 capacity,
-			 u64 *size);
+				u64 *size);
+enum vfs_error vfs_get_size(struct vfs_node *file, u64 *size);
 enum vfs_error vfs_touch(struct vfs_node *cwd, const char *path,
 			 struct vfs_node **result);
 enum vfs_error vfs_write(struct vfs_node *cwd, const char *path,

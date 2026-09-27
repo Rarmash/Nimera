@@ -168,6 +168,7 @@ struct irq_frame *scheduler_terminate_current(struct irq_frame *frame)
 	}
 	threads[current_thread].frame = frame;
 	threads[current_thread].state = THREAD_TERMINATED;
+	scheduler_wake_console_input();
 	return scheduler_schedule(frame);
 }
 
@@ -184,6 +185,14 @@ long long scheduler_user_exit_status(void)
 void scheduler_set_user_exit_status(long long status)
 {
 	user_exit_status = status;
+}
+
+void scheduler_release_user_task(void)
+{
+	if (current_thread == 2U) panic("released running user task");
+	threads[2].frame = (struct irq_frame *)0;
+	threads[2].state = THREAD_TERMINATED;
+	user_enabled = 0U;
 }
 
 unsigned int scheduler_thread_count(void)

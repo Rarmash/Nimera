@@ -3,6 +3,7 @@
 #include <nimera/console.h>
 #include <nimera/block.h>
 #include <nimera/editor.h>
+#include <nimera/elf.h>
 #include <nimera/exception.h>
 #include <nimera/format.h>
 #include <nimera/heap.h>
@@ -865,6 +866,10 @@ void kernel_main(void)
 		mount_result = format_result == NIMFS_OK ?
 			nimfs_mount((struct block_device *)root_device) : format_result;
 		tree_result = mount_result == NIMFS_OK ? nimfs_create_initial_tree() : VFS_INVALID_PATH;
+		#if NIMERA_ELF_INSTALL_TEST
+		if (tree_result == VFS_OK && elf_install_test_payload(vfs_root()) != 0)
+			tree_result = VFS_NO_MEMORY;
+		#endif
 		if (format_result != NIMFS_OK || mount_result != NIMFS_OK || tree_result != VFS_OK) {
 			console_write("format="); format_u64_decimal((u64)format_result);
 			console_write(" mount="); format_u64_decimal((u64)mount_result);
@@ -928,7 +933,19 @@ void kernel_main(void)
 #endif
 	irq_init();
 	scheduler_init();
-	irq_enable();
+irq_enable();
+
+#if NIMERA_ELF_RUN_TEST
+	{
+		enum elf_result elf_result = elf_load_user(vfs_root(), "/apps/hello");
+		if (elf_result != ELF_OK) panic(elf_error_string(elf_result));
+		console_write("ELF loader test: entering /apps/hello\r\n");
+		scheduler_block_current();
+		while (elf_user_task_active() != 0) arch_wait_for_event();
+		console_write("ELF loader test: task exited\r\n");
+		return;
+	}
+#endif
 
 #if NIMERA_USER_TEST || NIMERA_USER_PROTECTION_TEST
 	console_write("Nimera userspace test\r\nKernel EL: ");

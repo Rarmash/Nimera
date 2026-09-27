@@ -32,3 +32,7 @@ build-volume/
 build-run/
 build-user/
 build-user-protection/
+build-user-app/
+build-elf/
+build-elf-format/
+build-elf-test/

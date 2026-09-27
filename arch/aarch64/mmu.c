@@ -207,13 +207,14 @@ static descriptor_t *split_block(descriptor_t *l2, u64 index)
 	return l3;
 }
 
-static void map_page(descriptor_t *root, u64 address, u64 attributes)
+static void map_page_at(descriptor_t *root, u64 virtual_address,
+				u64 physical_address, u64 attributes)
 {
-	descriptor_t *l2 = l2_table(root, address);
-	u64 l2_index = (address >> 21) & 0x1ffULL;
+	descriptor_t *l2 = l2_table(root, virtual_address);
+	u64 l2_index = (virtual_address >> 21) & 0x1ffULL;
 	descriptor_t *l3;
-	u64 l3_index = (address >> 12) & 0x1ffULL;
-	descriptor_t descriptor = address | DESC_VALID | DESC_TABLE | attributes;
+	u64 l3_index = (virtual_address >> 12) & 0x1ffULL;
+	descriptor_t descriptor = physical_address | DESC_VALID | DESC_TABLE | attributes;
 	unsigned int new_l3 = (l2[l2_index] & DESC_VALID) == 0ULL;
 
 	if ((l2[l2_index] & DESC_VALID) != 0ULL &&
@@ -226,7 +227,15 @@ static void map_page(descriptor_t *root, u64 address, u64 attributes)
 			++l3_table_page_count;
 		}
 	}
+	if ((l3[l3_index] & DESC_VALID) != 0ULL &&
+	    (l3[l3_index] & 0x0000fffffffff000ULL) != physical_address)
+		panic("MMU user page mapping conflict");
 	l3[l3_index] = descriptor;
+}
+
+static void map_page(descriptor_t *root, u64 address, u64 attributes)
+{
+	map_page_at(root, address, address, attributes);
 }
 
 static u64 page_align_down(u64 address)
@@ -514,14 +523,56 @@ int mmu_user_readable_range(u64 address, u64 length)
 	if (length == 0ULL) return 1;
 	if (address > ~0ULL - length) return 0;
 	end = address + length;
-	return (address >= symbol_address(__user_text_start) &&
-		end <= symbol_address(__user_text_end)) ||
-	       (address >= symbol_address(__user_rodata_start) &&
-		end <= symbol_address(__user_rodata_end)) ||
-	       (address >= symbol_address(__user_data_start) &&
-		end <= symbol_address(__user_data_end)) ||
-	       (address >= symbol_address(__user_stack_bottom) &&
-		end <= symbol_address(__user_stack_top));
+	for (u64 page = page_align_down(address); page < end;
+	     page += NIMERA_PAGE_SIZE) {
+		descriptor_t descriptor = lookup_descriptor(page);
+		u64 ap = (descriptor >> 6) & 3ULL;
+		if ((descriptor & DESC_VALID) == 0ULL || (ap != 1ULL && ap != 3ULL))
+			return 0;
+	}
+	return 1;
+}
+
+int mmu_map_user_page(u64 virtual_address, u64 physical_address,
+			 unsigned int permissions)
+{
+	descriptor_t attributes;
+
+	if (initialized == 0U || (virtual_address & (NIMERA_PAGE_SIZE - 1ULL)) != 0ULL ||
+	    (physical_address & (NIMERA_PAGE_SIZE - 1ULL)) != 0ULL ||
+	    ((permissions & MMU_USER_WRITE) != 0U &&
+	     (permissions & MMU_USER_EXEC) != 0U)) return -1;
+	if ((permissions & MMU_USER_EXEC) != 0U)
+		attributes = descriptor_attributes(user_ro_x(0ULL));
+	else if ((permissions & MMU_USER_WRITE) != 0U)
+		attributes = descriptor_attributes(user_rw_nx(0ULL));
+	else
+		attributes = descriptor_attributes(user_ro_nx(0ULL));
+	map_page_at((descriptor_t *)(unsigned long)root_table_address,
+			virtual_address, physical_address, attributes);
+	__asm__ volatile("dsb sy\n\ttlbi vmalle1\n\tdsb sy\n\tisb" ::: "memory");
+	return 0;
+}
+
+int mmu_unmap_user_page(u64 virtual_address)
+{
+	descriptor_t *root;
+	descriptor_t *l2;
+	descriptor_t *l3;
+	u64 l2_index;
+	u64 l3_index;
+
+	if (initialized == 0U || (virtual_address & (NIMERA_PAGE_SIZE - 1ULL)) != 0ULL)
+		return -1;
+	root = (descriptor_t *)(unsigned long)root_table_address;
+	l2 = l2_table(root, virtual_address);
+	l2_index = (virtual_address >> 21) & 0x1ffULL;
+	if ((l2[l2_index] & DESC_TABLE) == 0ULL) return -1;
+	l3 = (descriptor_t *)(unsigned long)(l2[l2_index] & ~0xfffULL);
+	l3_index = (virtual_address >> 12) & 0x1ffULL;
+	l3[l3_index] = 0ULL;
+	__asm__ volatile("dsb sy\n\ttlbi vmalle1\n\tdsb sy\n\tisb" ::: "memory");
+	return 0;
 }
 
 int mmu_map_device_range(u64 start, u64 size)

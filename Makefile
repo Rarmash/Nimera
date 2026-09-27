@@ -32,6 +32,8 @@ TERMINAL_TEST ?= 0
 TERMINAL_SIZE_TEST ?= 0
 TERMINAL_SIZE_NO_RESPONSE ?= 0
 EDITOR_TEST ?= 0
+ELF_INSTALL_TEST ?= 0
+ELF_RUN_TEST ?= 0
 BLOCK_TEST ?= 0
 NIMFS_BOOT ?= 0
 NIMFS_FORMAT_TEST ?= 0
@@ -44,11 +46,17 @@ NIMFS_STORAGE_IMAGE ?= build-storage/nimfs.img
 NIMFS_ROOT_IMAGE ?= build-storage/nimfs-root.img
 NIMFS_DATA_IMAGE ?= build-storage/nimfs-data.img
 NIMFS_DATA2_IMAGE ?= build-storage/nimfs-data2.img
+NIMFS_ELF_IMAGE ?= build-storage/nimfs-elf.img
 STORAGE_DIR ?= build-storage
 STORAGE_IMAGE ?= $(STORAGE_DIR)/nimera-test.img
 STORAGE_SIZE ?= 64M
 QEMU_MEMORY ?= 128M
 QEMU_MACHINE ?= virt,gic-version=2
+USER_APP_BUILD_DIR ?= build-user-app
+USER_APP_ELF := $(USER_APP_BUILD_DIR)/hello.elf
+USER_CC := $(LLVM_PREFIX)/bin/clang
+USER_LD := $(LLD_PREFIX)/bin/ld.lld
+USER_OBJCOPY := $(LLVM_PREFIX)/bin/llvm-objcopy
 
 CFLAGS := \
 	--target=aarch64-none-elf \
@@ -93,7 +101,9 @@ CFLAGS := \
 	-DNIMERA_NIMFS_MOUNT_TEST=$(NIMFS_MOUNT_TEST) \
 	-DNIMERA_NIMFS_VOLUME_TEST=$(NIMFS_VOLUME_TEST) \
 	-DNIMERA_USER_TEST=$(USER_TEST) \
-	-DNIMERA_USER_PROTECTION_TEST=$(USER_PROTECTION_TEST)
+	-DNIMERA_USER_PROTECTION_TEST=$(USER_PROTECTION_TEST) \
+	-DNIMERA_ELF_INSTALL_TEST=$(ELF_INSTALL_TEST) \
+	-DNIMERA_ELF_RUN_TEST=$(ELF_RUN_TEST)
 
 LDFLAGS := \
 	-T linker.ld \
@@ -102,9 +112,13 @@ LDFLAGS := \
 	-z max-page-size=0x1000 \
 	-Map=$(MAP)
 
-OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/exception-vector.o $(BUILD_DIR)/halt.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/terminal.o $(BUILD_DIR)/editor.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/exception.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/irq.o $(BUILD_DIR)/scheduler.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/nimfs.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/arch-irq.o $(BUILD_DIR)/mmu.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/qemu-memory.o $(BUILD_DIR)/qemu-irq.o $(BUILD_DIR)/qemu-virtio.o $(BUILD_DIR)/gic.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/heap.o $(BUILD_DIR)/format.o $(BUILD_DIR)/shell.o $(BUILD_DIR)/block.o $(BUILD_DIR)/uart.o $(BUILD_DIR)/arch-exception.o $(BUILD_DIR)/user-test.o $(BUILD_DIR)/user-syscall.o
+OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/exception-vector.o $(BUILD_DIR)/halt.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/terminal.o $(BUILD_DIR)/editor.o $(BUILD_DIR)/elf.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/exception.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/irq.o $(BUILD_DIR)/scheduler.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/nimfs.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/arch-irq.o $(BUILD_DIR)/mmu.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/qemu-memory.o $(BUILD_DIR)/qemu-irq.o $(BUILD_DIR)/qemu-virtio.o $(BUILD_DIR)/gic.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/heap.o $(BUILD_DIR)/format.o $(BUILD_DIR)/shell.o $(BUILD_DIR)/block.o $(BUILD_DIR)/uart.o $(BUILD_DIR)/arch-exception.o $(BUILD_DIR)/user-test.o $(BUILD_DIR)/user-syscall.o
 
-.PHONY: build run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block run-user run-user-protection disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
+ifneq ($(ELF_INSTALL_TEST),0)
+OBJECTS += $(BUILD_DIR)/hello-payload.o
+endif
+
+.PHONY: build user-app run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block run-user run-user-protection run-elf-format run-elf run-elf-test nimfs-elf-disk-create nimfs-elf-disk-reset disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
 
 build: $(ELF)
 
@@ -120,7 +134,7 @@ $(BUILD_DIR)/exception-vector.o: arch/aarch64/exception.S | $(BUILD_DIR)/.dir
 $(BUILD_DIR)/halt.o: arch/aarch64/halt.S | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/main.o: kernel/main.c include/nimera/block.h include/nimera/editor.h include/nimera/exception.h include/nimera/format.h include/nimera/heap.h include/nimera/irq.h include/nimera/memory.h include/nimera/mmu.h include/nimera/nimfs.h include/nimera/panic.h include/nimera/pmm.h include/nimera/scheduler.h include/nimera/shell.h include/nimera/terminal.h include/nimera/timer.h include/nimera/user.h include/nimera/vfs.h include/nimera/virtio.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/main.o: kernel/main.c include/nimera/block.h include/nimera/editor.h include/nimera/elf.h include/nimera/exception.h include/nimera/format.h include/nimera/heap.h include/nimera/irq.h include/nimera/memory.h include/nimera/mmu.h include/nimera/nimfs.h include/nimera/panic.h include/nimera/pmm.h include/nimera/scheduler.h include/nimera/shell.h include/nimera/terminal.h include/nimera/timer.h include/nimera/user.h include/nimera/vfs.h include/nimera/virtio.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/console.o: kernel/console.c include/nimera/console.h | $(BUILD_DIR)/.dir
@@ -131,6 +145,26 @@ $(BUILD_DIR)/terminal.o: kernel/terminal.c include/nimera/console.h include/nime
 
 $(BUILD_DIR)/editor.o: kernel/editor.c include/nimera/console.h include/nimera/editor.h include/nimera/format.h include/nimera/heap.h include/nimera/panic.h include/nimera/terminal.h include/nimera/vfs.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/elf.o: kernel/elf.c include/nimera/elf.h include/nimera/heap.h include/nimera/mmu.h include/nimera/pmm.h include/nimera/scheduler.h include/nimera/user.h include/nimera/vfs.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/hello-payload.o: $(USER_APP_ELF) | $(BUILD_DIR)/.dir
+	$(USER_OBJCOPY) -I binary -O elf64-littleaarch64 -B aarch64 $< $@
+
+user-app: $(USER_APP_ELF)
+
+$(USER_APP_ELF): $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/hello.o $(USER_APP_BUILD_DIR)/syscall.o user/apps/hello/linker.ld | $(USER_APP_BUILD_DIR)/.dir
+	$(USER_LD) -T user/apps/hello/linker.ld -m aarch64elf -e _start -z max-page-size=0x1000 -Map=$(USER_APP_BUILD_DIR)/hello.map -o $@ $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/hello.o $(USER_APP_BUILD_DIR)/syscall.o
+
+$(USER_APP_BUILD_DIR)/start.o: user/apps/hello/start.S | $(USER_APP_BUILD_DIR)/.dir
+	$(USER_CC) --target=aarch64-none-elf -c $< -o $@
+
+$(USER_APP_BUILD_DIR)/syscall.o: user/apps/hello/syscall.S include/nimera/abi/syscall.h | $(USER_APP_BUILD_DIR)/.dir
+	$(USER_CC) --target=aarch64-none-elf -Iinclude -c $< -o $@
+
+$(USER_APP_BUILD_DIR)/hello.o: user/apps/hello/main.c | $(USER_APP_BUILD_DIR)/.dir
+	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iinclude -c $< -o $@
 
 $(BUILD_DIR)/panic.o: kernel/panic.c include/nimera/console.h include/nimera/panic.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -198,7 +232,7 @@ $(BUILD_DIR)/block.o: kernel/block.c include/nimera/block.h include/nimera/panic
 $(BUILD_DIR)/nimfs.o: kernel/nimfs.c include/nimera/heap.h include/nimera/nimfs.h include/nimera/panic.h include/nimera/version.h include/nimera/vfs.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/shell.o: kernel/shell.c include/nimera/console.h include/nimera/editor.h include/nimera/format.h include/nimera/heap.h include/nimera/irq.h include/nimera/memory.h include/nimera/mmu.h include/nimera/nimfs.h include/nimera/pmm.h include/nimera/scheduler.h include/nimera/shell.h include/nimera/terminal.h include/nimera/timer.h include/nimera/version.h include/nimera/vfs.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/shell.o: kernel/shell.c include/nimera/console.h include/nimera/editor.h include/nimera/elf.h include/nimera/format.h include/nimera/heap.h include/nimera/irq.h include/nimera/memory.h include/nimera/mmu.h include/nimera/nimfs.h include/nimera/pmm.h include/nimera/scheduler.h include/nimera/shell.h include/nimera/terminal.h include/nimera/timer.h include/nimera/version.h include/nimera/vfs.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/uart.o: platform/qemu-virt/uart.c include/nimera/irq.h include/nimera/panic.h include/nimera/scheduler.h include/nimera/types.h | $(BUILD_DIR)/.dir
@@ -211,6 +245,9 @@ $(BUILD_DIR)/user-syscall.o: user/syscall.S include/nimera/abi/syscall.h | $(BUI
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/.dir:
+	mkdir -p $@
+
+$(USER_APP_BUILD_DIR)/.dir:
 	mkdir -p $@
 
 run:
@@ -490,6 +527,14 @@ nimfs-disk-reset:
 	rm -f $(NIMFS_STORAGE_IMAGE)
 	$(MAKE) nimfs-disk-create
 
+nimfs-elf-disk-create:
+	mkdir -p $(STORAGE_DIR)
+	@test -e $(NIMFS_ELF_IMAGE) || $(QEMU_IMG) create -f raw $(NIMFS_ELF_IMAGE) 64M
+
+nimfs-elf-disk-reset:
+	rm -f $(NIMFS_ELF_IMAGE)
+	$(MAKE) nimfs-elf-disk-create
+
 nimfs-root-create:
 	mkdir -p $(STORAGE_DIR)
 	@test -e $(NIMFS_ROOT_IMAGE) || $(QEMU_IMG) create -f raw $(NIMFS_ROOT_IMAGE) 64M
@@ -523,6 +568,21 @@ run-nimfs: nimfs-disk-create
 	rm -rf build-nimfs
 	$(MAKE) BUILD_DIR=build-nimfs NIMFS_FORMAT_TEST=0 NIMFS_BOOT=1 TERMINAL_SIZE_NO_RESPONSE=1 BLOCK_TEST=0 build
 	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_STORAGE_IMAGE),format=raw,id=nimfs-disk -device virtio-blk-device,drive=nimfs-disk -device loader,file=build-nimfs/baremetal-aarch64.elf,cpu-num=0
+
+run-elf-format: nimfs-elf-disk-reset user-app
+	rm -rf build-elf-format
+	$(MAKE) BUILD_DIR=build-elf-format NIMFS_FORMAT_TEST=1 NIMFS_BOOT=0 ELF_INSTALL_TEST=1 BLOCK_TEST=0 build
+	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimfs-elf -device virtio-blk-device,drive=nimfs-elf -device loader,file=build-elf-format/baremetal-aarch64.elf,cpu-num=0
+
+run-elf: nimfs-elf-disk-create user-app
+	rm -rf build-elf
+	$(MAKE) BUILD_DIR=build-elf NIMFS_FORMAT_TEST=0 NIMFS_BOOT=1 ELF_INSTALL_TEST=1 TERMINAL_SIZE_NO_RESPONSE=1 BLOCK_TEST=0 build
+	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimfs-elf -device virtio-blk-device,drive=nimfs-elf -device loader,file=build-elf/baremetal-aarch64.elf,cpu-num=0
+
+run-elf-test: nimfs-elf-disk-create user-app
+	rm -rf build-elf-test
+	$(MAKE) BUILD_DIR=build-elf-test NIMFS_FORMAT_TEST=0 NIMFS_BOOT=1 ELF_INSTALL_TEST=1 ELF_RUN_TEST=1 TERMINAL_SIZE_NO_RESPONSE=1 BLOCK_TEST=0 build
+	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimfs-elf -device virtio-blk-device,drive=nimfs-elf -device loader,file=build-elf-test/baremetal-aarch64.elf,cpu-num=0
 
 run-nimfs-multi-format: nimfs-root-create nimfs-data-create
 	rm -rf build-nimfs-multi-format
@@ -564,4 +624,4 @@ run-mounts: nimfs-root-reset nimfs-data-reset
 	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_DATA_IMAGE),format=raw,id=nimfs-data -device virtio-blk-device,drive=nimfs-data -drive if=none,file=$(NIMFS_ROOT_IMAGE),format=raw,id=nimfs-root -device virtio-blk-device,drive=nimfs-root -device loader,file=build-mounts/baremetal-aarch64.elf,cpu-num=0
 
 clean:
-	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-user build-user-protection build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume
+	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-user build-user-protection build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume build-elf build-elf-format build-elf-test build-user-app

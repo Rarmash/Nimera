@@ -1,6 +1,7 @@
 #include <nimera/console.h>
 #include <nimera/block.h>
 #include <nimera/editor.h>
+#include <nimera/elf.h>
 #include <nimera/format.h>
 #include <nimera/irq.h>
 #include <nimera/memory.h>
@@ -69,6 +70,7 @@ static void shell_help(void)
 	console_write("  rmdir <directory>\r\n");
 	console_write("  mv <source> <destination>\r\n");
 	console_write("  edit <path>\r\n");
+	console_write("  run <path>\r\n");
 	console_write("  terminal\r\n");
 	console_write("  disks\r\n");
 	console_write("  mounts\r\n");
@@ -215,6 +217,25 @@ static void shell_eject(const char *argument)
 		if (error != VFS_OK) { shell_fs_error(error); return; }
 	}
 	console_write("Ejected "); console_write(name); console_write("\r\n");
+}
+
+static void shell_run_program(const char *argument)
+{
+	enum elf_result result;
+
+	if (argument == (const char *)0 || argument[0] == '\0') {
+		console_write("Usage: run <path>\r\n");
+		return;
+	}
+	result = elf_load_user(shell_cwd, argument);
+	if (result != ELF_OK) {
+		console_write("run: "); console_write(elf_error_string(result));
+		console_write("\r\n");
+		return;
+	}
+	console_write("Entering EL0...\r\n");
+	scheduler_block_current();
+	while (elf_user_task_active() != 0) arch_wait_for_event();
 }
 
 static void shell_fsinfo(void)
@@ -650,6 +671,8 @@ static void shell_execute(char *line, unsigned int length)
 		shell_mount(argument);
 	} else if (text_equals(line, "eject")) {
 		shell_eject(argument);
+	} else if (text_equals(line, "run")) {
+		shell_run_program(argument);
 	} else if (text_equals(line, "fsinfo")) {
 		shell_fsinfo();
 	} else if (length != 0U) {

@@ -1,5 +1,6 @@
 #include <nimera/abi/syscall.h>
 #include <nimera/console.h>
+#include <nimera/elf.h>
 #include <nimera/mmu.h>
 #include <nimera/scheduler.h>
 #include <nimera/syscall.h>
@@ -29,7 +30,14 @@ struct irq_frame *syscall_handle(struct irq_frame *frame)
 		return frame;
 	case NIMERA_SYS_EXIT:
 		scheduler_set_user_exit_status((long long)frame->x[0]);
-		return scheduler_terminate_current(frame);
+		{
+			struct irq_frame *next = scheduler_terminate_current(frame);
+			if (elf_user_task_active() != 0) {
+				elf_user_task_finished();
+				scheduler_release_user_task();
+			}
+			return next;
+		}
 	default:
 		frame->x[0] = (u64)NIMERA_SYSCALL_UNSUPPORTED;
 		return frame;

@@ -63,9 +63,12 @@ The current milestone successfully:
   VirtIO block device. Regular files, directories, overwrite, append, rename,
   unlink, and empty-directory removal use the same VFS as RAMFS; an additional
   NimFS volume can be mounted below `/volumes` with a persistent bounded label;
-  volumes can be logically ejected and remounted without formatting.
+  volumes can be logically ejected and remounted without formatting; and
+- loads a separate freestanding AArch64 ELF executable from `/apps/hello`
+  through the VFS, maps its `PT_LOAD` segments with EL0 permissions, runs it,
+  and reclaims its user pages after `SYS_exit`.
 
-The isolated `run-user` milestone also provides the first EL0 task and a small
+The isolated `run-user` milestone also provides the first embedded EL0 task and a small
 syscall boundary. The user image is linked into the kernel ELF, but its
 `.user.text`, `.user.rodata`, `.user.data`, and `.user.bss` sections receive
 separate permissions: EL0 text is read-only/executable, while user data and
@@ -73,13 +76,38 @@ the 16 KiB user stack are read-write/non-executable. Kernel code and MMIO
 remain EL1-only. There is still one global page table, no processes, and no ELF
 loader.
 
-There is currently no libc, userspace,
-processes, UART TX interrupt path, or other larger OS subsystem. The current
+There is currently no libc, process table, dynamic linker, filesystem syscall,
+UART TX interrupt path, or other larger OS subsystem. The current
 RAMFS root is RAM-only and disappears on reboot; the separate NimFS boot mode
 uses the persistent disk image described below. The MMU
 The MMU
 is enabled after early initialization, but this is not yet a general virtual
 memory manager.
+
+## First ELF executable
+
+The first file-backed userspace program is a separately linked ELF64
+`ET_EXEC` for AArch64. It has no libc, CRT, kernel symbol references, or
+dynamic linker. Its startup is `_start -> main -> SYS_exit`; output uses the
+public `SYS_write_console` ABI. The development payload is installed as the
+exact ELF bytes into NimFS `/apps/hello` by an explicitly selected test build.
+The loader itself only resolves and reads that path through the VFS.
+
+The loader reads program headers, not section headers. It currently accepts
+only little-endian ELF64, AArch64, `ET_EXEC`, and `PT_LOAD` segments. It checks
+file and virtual-address ranges, `p_filesz <= p_memsz`, executable entry,
+segment alignment, and rejects writable+executable pages. A fixed user virtual
+range `0x10000000..0x20000000` is backed by fresh PMM pages: RX segments become
+EL0 read-only/executable, RW segments become EL0 read-write/NX, and read-only
+segments become EL0 read-only/NX. The loader zeroes BSS tails and creates a
+16 KiB EL0 stack with one unmapped guard page below it.
+
+Only one dynamically loaded user task exists at a time. After exit or an EL0
+fault, its mappings, code/data pages, stack pages, and temporary image state
+are released. There are still no processes, PIDs, argv, separate address
+spaces, `fork`, `exec`, relocations, PIE, shared libraries, or userspace file
+descriptors. The current loader image limit is 64 KiB and the current test
+program demonstrates both console output and zero-initialized BSS.
 
 ## Boot flow
 
@@ -240,8 +268,37 @@ The first target demonstrates SVC output, timer preemption, register/local
 integrity, and exit. The second attempts to write kernel `.data`; the expected
 result is a `Data Abort from EL0`, termination of that task, and a surviving
 kernel. Invalid EL1 faults still use the existing fatal panic/halt policy.
-There is no ELF loader, executable file support, userspace shell, filesystem
-syscall, separate address space, fork, exec, libc, or dynamic linker yet.
+The embedded user image is still only a regression fixture; it is not loaded
+from a file.
+
+Build the separate test executable with:
+
+```sh
+make user-app
+```
+
+This produces `build-user-app/hello.elf`; it is not linked into the ordinary
+kernel ELF. To create a fresh isolated NimFS image and install its exact bytes
+at `/apps/hello`, run:
+
+```sh
+make run-elf-format
+```
+
+This explicitly reformats `build-storage/nimfs-elf.img` and is destructive to
+that development image. Afterward, `make run-elf` mounts the same image
+without formatting. In its shell, run:
+
+```text
+nimera:/ $ run /apps/hello
+hello from ELF userspace!
+BSS zero: OK
+nimera:/ $
+```
+
+For a non-interactive loader regression, `make run-elf-test` boots the same
+image and waits for `/apps/hello` to exit automatically. The normal shell
+path remains `run /apps/hello`; the loader only reads the file through VFS.
 
 NimEdit 0.1 is entered with the shell command `edit <path>`. It is a kernel
 application, not a userspace process: it uses the common terminal and VFS APIs
@@ -831,6 +888,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │       ├── memory.h
 │       ├── mmu.h
 │       ├── panic.h
+│       ├── elf.h
 │       ├── pmm.h
 │       ├── scheduler.h
 │       ├── shell.h
@@ -850,6 +908,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │       └── timer.c
 ├── kernel/
 │   ├── console.c
+│   ├── elf.c
 │   ├── exception.c
 │   ├── format.c
 │   ├── heap.c
@@ -863,6 +922,12 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │   ├── shell.c
 │   ├── timer.c
 │   └── vfs.c
+├── user/
+│   └── apps/hello/
+│       ├── main.c
+│       ├── start.S
+│       ├── syscall.S
+│       └── linker.ld
 └── platform/
     └── qemu-virt/
         ├── gic.c
@@ -915,10 +980,14 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `include/nimera/types.h` — the minimal freestanding `u64` type definition.
 - `kernel/console.c` — delegates the common console API to the current UART
   implementation.
+- `kernel/elf.c` — validates supported ELF64 program headers, allocates/maps
+  the one dynamic EL0 task, loads BSS, and releases its pages after exit.
 - `kernel/block.c` — registers and dispatches the small generic block-device
   set; it contains no VirtIO register knowledge.
 - `kernel/nimfs.c` — the small versioned whole-disk filesystem and VFS backend;
   it contains no VirtIO queue knowledge.
+- `user/apps/hello/` — the separately linked freestanding ELF test program;
+  its build artifacts are kept outside the source tree in `build-user-app/`.
 - `kernel/terminal.c` — bounded ANSI key decoding, one-shot geometry
   detection, fallback, and pending input; it does not access PL011 directly.
 - `kernel/exception.c` — prints synchronous-exception diagnostics through the
