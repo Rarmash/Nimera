@@ -63,3 +63,4 @@ build-fb-terminal/
 build-fb-terminal-test/
 build-utils/
 build-utils-format/
+build-native-input-test/

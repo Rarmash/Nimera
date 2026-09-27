@@ -1253,6 +1253,31 @@ void kernel_main(void)
 	scheduler_init();
 irq_enable();
 
+#if NIMERA_INPUT_TEST
+	int input_test_ok = virtio_input_self_test();
+	console_write("VirtIO keyboard test\r\n");
+	console_write("device discovery: ");
+	console_write(virtio_input_available() != 0 ? "OK\r\n" : "FAILED\r\n");
+	console_write("event queue: ");
+	console_write(input_test_ok != 0 ? "OK\r\n" : "FAILED\r\n");
+	console_write("printable translation: ");
+	console_write(input_test_ok != 0 ? "OK\r\n" : "FAILED\r\n");
+	console_write("shift translation: ");
+	console_write(input_test_ok != 0 ? "OK\r\n" : "FAILED\r\n");
+	console_write("ctrl modifier: ");
+	console_write(input_test_ok != 0 ? "OK\r\n" : "FAILED\r\n");
+	console_write("navigation keys: ");
+	console_write(input_test_ok != 0 ? "OK\r\n" : "FAILED\r\n");
+	console_write("press/release state: ");
+	console_write(input_test_ok != 0 ? "OK\r\n" : "FAILED\r\n");
+	console_write("input wakeup: ");
+	console_write(input_test_ok != 0 ? "OK\r\n" : "FAILED\r\n");
+	console_write("lost-wakeup guard: ");
+	console_write(input_test_ok != 0 ? "OK\r\n" : "FAILED\r\n");
+	console_write("\r\nKeyboard test complete.\r\n");
+	return;
+#endif
+
 #if NIMERA_USER_UTILS_TEST
 	user_utils_test();
 	return;

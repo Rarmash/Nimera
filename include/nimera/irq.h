@@ -38,5 +38,6 @@ void arch_signal_event(void);
 void arch_timer_irq_init(void);
 void arch_timer_irq_rearm(void);
 void arch_timer_irq_stop(void);
+void platform_gic_enable_interrupt(u64 interrupt_id);
 
 #endif

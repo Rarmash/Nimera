@@ -3,6 +3,8 @@
 #include <nimera/format.h>
 #include <nimera/panic.h>
 #include <nimera/scheduler.h>
+#include <nimera/input.h>
+#include <nimera/virtio.h>
 
 extern void platform_gic_init(const struct irq_platform_info *info);
 extern u64 platform_gic_acknowledge(void);
@@ -24,6 +26,13 @@ void irq_init(void)
 	platform_gic_init(&platform_info);
 	arch_timer_irq_init();
 	uart_enable_rx_interrupt();
+	input_init();
+	if (virtio_input_init() == 0) {
+		platform_gic_enable_interrupt(virtio_input_interrupt());
+		if (virtio_pointer_available() != 0)
+			platform_gic_enable_interrupt(virtio_pointer_interrupt());
+		input_set_hardware_available(1);
+	}
 	timer_irq_count = 0ULL;
 	user_preemption_count = 0ULL;
 }
@@ -70,6 +79,23 @@ struct irq_frame *irq_handle(struct irq_frame *frame)
 	}
 	if (interrupt_id == platform_info.uart_intid) {
 		uart_handle_irq();
+		platform_gic_end(interrupt_id);
+		return frame;
+	}
+	if (virtio_input_available() != 0 &&
+		interrupt_id == virtio_input_interrupt()) {
+		int shell_waiting = scheduler_input_waiting();
+		virtio_input_handle_irq();
+		/* A key can wake the shell while the timer worker is running. */
+		if (shell_waiting != 0) frame = scheduler_schedule(frame);
+		platform_gic_end(interrupt_id);
+		return frame;
+	}
+	if (virtio_pointer_available() != 0 &&
+		interrupt_id == virtio_pointer_interrupt()) {
+		int shell_waiting = scheduler_input_waiting();
+		virtio_pointer_handle_irq();
+		if (shell_waiting != 0) frame = scheduler_schedule(frame);
 		platform_gic_end(interrupt_id);
 		return frame;
 	}

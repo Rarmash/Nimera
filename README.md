@@ -240,8 +240,8 @@ not implement `CSI 18 t` cleanly; the negotiation remains available through
 the dedicated terminal-size targets.
 NimEdit uses this logical API rather than knowing PL011 registers or the ANSI
 protocol. Geometry is detected once per boot; live resize is not implemented.
-There is no framebuffer, native graphics backend, Unicode input, or general
-VT100 emulator yet.
+The framebuffer backend is available through the dedicated graphics targets;
+there is still no Unicode input or general VT100 emulator.
 
 ## First EL0 userspace and syscalls
 
@@ -527,9 +527,22 @@ not hardcoded terminal geometry.
 
 The ordinary `make run` path remains the ANSI/PL011 backend. In framebuffer
 mode, shell and EL0 application output uses the same terminal API and ABI as
-before, while UART remains the input path and the debug/panic output path. GPU
-initialization failure falls back to the ANSI terminal. There is no VirtIO
-keyboard, GUI, compositor, or userspace framebuffer mapping yet.
+before. `make run-fb-terminal` also adds QEMU `virtio-keyboard-device` and
+`virtio-tablet-device`: keyboard IRQs are translated into the existing
+hardware-independent logical key events, while the tablet has its own bounded
+pointer-event queue. Its advertised ABS_X/ABS_Y ranges are scaled and clamped
+to framebuffer pixels, and the framebuffer terminal draws a small software
+cursor over its cell grid. Pointer button events are decoded but are not yet
+used by the shell or terminal. The current keyboard translation uses a fixed
+US layout and supports the shell/editor keys, Shift, and Ctrl-S/Ctrl-Q. UART
+remains the debug and panic/rescue console; if the optional keyboard is absent,
+the framebuffer path falls back to UART input. This is pointer input and
+software cursor support, not a GUI, compositor, window manager, or userspace
+input-device API.
+
+`make run-native-input-test` runs the isolated keyboard model/discovery test.
+It checks the VirtIO-MMIO keyboard, fixed event queue, printable/Shift/Ctrl
+translation, navigation events, and the IRQ wakeup path.
 
 `make run-fb-terminal-test` runs the existing logical terminal test against the
 framebuffer backend. It exercises printable characters, control operations,
@@ -1236,6 +1249,9 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   text rendering, and the first graphics test pattern.
 - `kernel/terminal_fb.c` — framebuffer terminal cell grid, cursor overlay,
   scrolling, and cell-sized display flushes.
+- `kernel/input.c` — bounded hardware-independent logical key-event queue and
+  blocking input handoff.
+- `include/nimera/input.h` — common key-event types and input queue API.
 - `kernel/elf.c` — validates supported ELF64 program headers, builds the
   bounded argv stack, creates process-owned mappings, and owns per-process
   cwd, file handles, and dynamic allocations.

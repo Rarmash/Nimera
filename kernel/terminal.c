@@ -286,6 +286,9 @@ static struct key_event terminal_character(char character)
 	if (character == '\b' || character == 127) {
 		return terminal_event(KEY_BACKSPACE, 0, 0U);
 	}
+	if (character == '\t') {
+		return terminal_event(KEY_TAB, 0, 0U);
+	}
 	if (character >= 32 && character <= 126) {
 		if (character == 's' || character == 'q') {
 			/* Control letters are encoded as ASCII 0x13/0x11. */
@@ -359,6 +362,18 @@ static struct key_event terminal_escape(void)
 struct key_event terminal_read_key(void)
 {
 	char character;
+	struct key_event event;
+	struct pointer_event pointer;
+
+	if (terminal_framebuffer_active() != 0 && input_hardware_available() != 0) {
+		for (;;) {
+			while (input_try_get_pointer_event(&pointer) != 0)
+				terminal_fb_handle_pointer_event(&pointer);
+			if (input_try_get_event(&event) != 0) return event;
+			input_wait_for_activity();
+		}
+	}
+	if (input_try_get_event(&event) != 0) return event;
 
 	terminal_next_byte(&character);
 	if (character == 27) {

@@ -50,6 +50,12 @@ static void enable_interrupt(u64 interrupt_id)
 		1U << (interrupt_id % 32ULL);
 }
 
+void platform_gic_enable_interrupt(u64 interrupt_id)
+{
+	if (gicd == (volatile unsigned int *)0 || interrupt_id == 0ULL) return;
+	enable_interrupt(interrupt_id);
+}
+
 void platform_gic_init(const struct irq_platform_info *info)
 {
 	gicd = (volatile unsigned int *)(unsigned long)info->gic_distributor_base;

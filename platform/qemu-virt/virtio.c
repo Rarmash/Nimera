@@ -6,6 +6,7 @@
 #include <nimera/console.h>
 #include <nimera/format.h>
 #include <nimera/display.h>
+#include <nimera/input.h>
 
 typedef unsigned char u8;
 typedef unsigned int u32;
@@ -52,7 +53,12 @@ unsigned int virtio_mmio_discover(struct virtio_mmio_info *out, unsigned int cap
 			else if(depth==1U && eq(name,"#size-cells")) { if(len!=4) panic("invalid size cells"); root_sc=be32(value); }
 			else if(depth==node_depth && eq(name,"compatible")) { for(u32 i=0;i+12U<=len;) { if(eq(value+i,"virtio,mmio")) compatible=1; while(i<len && value[i]) ++i; ++i; } }
 			else if(depth==node_depth && eq(name,"reg")) { if(root_ac==0||root_sc==0||root_ac>2||root_sc>2||len<(root_ac+root_sc)*4U) panic("invalid virtio reg"); base=cells(value,root_ac); size=cells(value+root_ac*4U,root_sc); have_reg=1; }
-			else if(depth==node_depth && eq(name,"interrupts")) { if(len<12U) panic("invalid virtio interrupt"); interrupt=be32(value+8U); }
+			else if(depth==node_depth && eq(name,"interrupts")) {
+				/* GIC SPI specifier: type, raw SPI number, trigger flags. */
+				if (len < 12U || be32(value) != 0U || be32(value + 4U) == 0U)
+					panic("invalid virtio interrupt");
+				interrupt = 32ULL + (u64)be32(value + 4U);
+			}
 		} else if(token==FDT_NOP) { } else if(token==FDT_END) { break; } else panic("unknown Device Tree token");
 	}
 	if (depth!=0U) panic("unbalanced Device Tree structure");
@@ -74,6 +80,8 @@ unsigned int virtio_mmio_discover(struct virtio_mmio_info *out, unsigned int cap
 #define V_QNUM 0x038U
 #define V_QREADY 0x044U
 #define V_NOTIFY 0x050U
+#define V_INT_STATUS 0x060U
+#define V_INT_ACK 0x064U
 #define V_STATUS 0x070U
 #define V_QDESC 0x080U
 #define V_QDRIVER 0x090U
@@ -178,6 +186,104 @@ struct gpu_header { u32 type, flags; u64 fence; u32 context, ring; } __attribute
 struct gpu_rect { u32 x, y, width, height; } __attribute__((packed));
 struct gpu_state { volatile u8 *base; u16 qsize; u64 desc, avail, used, request, response; u16 last_used, avail_index; u64 framebuffer, framebuffer_pages; u64 width, height, pitch; };
 static struct gpu_state gpu;
+
+#define INPUT_DEVICE_ID 18U
+#define INPUT_EVENT_QUEUE 0U
+#define INPUT_CONFIG_SELECT 0x00U
+#define INPUT_CONFIG_SUBSELECT 0x01U
+#define INPUT_CONFIG_SIZE 0x02U
+#define INPUT_CONFIG_DATA 0x08U
+#define INPUT_CONFIG_EV_BITS 0x11U
+#define INPUT_CONFIG_ABS_INFO 0x12U
+#define INPUT_EVENT_TYPE_SYN 0U
+#define INPUT_EVENT_TYPE_KEY 1U
+#define INPUT_EVENT_TYPE_REL 2U
+#define INPUT_EVENT_TYPE_ABS 3U
+#define INPUT_CODE_ABS_X 0U
+#define INPUT_CODE_ABS_Y 1U
+#define INPUT_CODE_REL_X 0U
+#define INPUT_CODE_REL_Y 1U
+#define INPUT_CODE_BTN_LEFT 272U
+#define INPUT_CODE_BTN_RIGHT 273U
+#define INPUT_KEY_ESC 1U
+#define INPUT_KEY_1 2U
+#define INPUT_KEY_0 11U
+#define INPUT_KEY_BACKSPACE 14U
+#define INPUT_KEY_TAB 15U
+#define INPUT_KEY_ENTER 28U
+#define INPUT_KEY_LEFT_CTRL 29U
+#define INPUT_KEY_LEFT_SHIFT 42U
+#define INPUT_KEY_Z 44U
+#define INPUT_KEY_A 30U
+#define INPUT_KEY_S 31U
+#define INPUT_KEY_D 32U
+#define INPUT_KEY_F 33U
+#define INPUT_KEY_G 34U
+#define INPUT_KEY_H 35U
+#define INPUT_KEY_J 36U
+#define INPUT_KEY_K 37U
+#define INPUT_KEY_L 38U
+#define INPUT_KEY_Q 16U
+#define INPUT_KEY_W 17U
+#define INPUT_KEY_E 18U
+#define INPUT_KEY_R 19U
+#define INPUT_KEY_T 20U
+#define INPUT_KEY_Y 21U
+#define INPUT_KEY_U 22U
+#define INPUT_KEY_I 23U
+#define INPUT_KEY_O 24U
+#define INPUT_KEY_P 25U
+#define INPUT_KEY_X 45U
+#define INPUT_KEY_C 46U
+#define INPUT_KEY_V 47U
+#define INPUT_KEY_B 48U
+#define INPUT_KEY_N 49U
+#define INPUT_KEY_M 50U
+#define INPUT_KEY_COMMA 51U
+#define INPUT_KEY_DOT 52U
+#define INPUT_KEY_SLASH 53U
+#define INPUT_KEY_RIGHT_SHIFT 54U
+#define INPUT_KEY_SPACE 57U
+#define INPUT_KEY_RIGHT_CTRL 97U
+#define INPUT_KEY_UP 103U
+#define INPUT_KEY_LEFT 105U
+#define INPUT_KEY_RIGHT 106U
+#define INPUT_KEY_DOWN 108U
+#define INPUT_KEY_HOME 102U
+#define INPUT_KEY_END 107U
+#define INPUT_KEY_DELETE 111U
+#define INPUT_KEY_EQUAL 13U
+#define INPUT_KEY_MINUS 12U
+#define INPUT_KEY_LEFT_BRACKET 26U
+#define INPUT_KEY_RIGHT_BRACKET 27U
+#define INPUT_KEY_BACKSLASH 43U
+#define INPUT_KEY_SEMICOLON 39U
+#define INPUT_KEY_APOSTROPHE 40U
+#define INPUT_KEY_GRAVE 41U
+
+struct virtio_input_event { u16 type; u16 code; u32 value; } __attribute__((packed));
+struct virtio_input_state {
+	volatile u8 *base;
+	u16 qsize;
+	u64 desc, avail, used, events;
+	u16 last_used, avail_index;
+	u64 interrupt;
+	unsigned int pointer;
+	unsigned int absolute;
+	unsigned int relative;
+	u32 x_min;
+	u32 x_max;
+	u32 y_min;
+	u32 y_max;
+	u32 x;
+	u32 y;
+	unsigned int buttons;
+	unsigned int shift;
+	unsigned int ctrl;
+	unsigned int active;
+};
+static struct virtio_input_state input_device;
+static struct virtio_input_state pointer_device;
 
 static void gpu_zero(u64 address, u64 size) { u8 *p = (u8 *)(unsigned long)address; for (u64 i = 0; i < size; ++i) p[i] = 0; }
 static void gpu_release(void)
@@ -298,4 +404,403 @@ int virtio_gpu_init(void)
 		return 0;
 	}
 	return -1;
+}
+
+static char input_letter(u16 code)
+{
+	static const u16 codes[] = {INPUT_KEY_A, INPUT_KEY_B, INPUT_KEY_C,
+		INPUT_KEY_D, INPUT_KEY_E, INPUT_KEY_F, INPUT_KEY_G, INPUT_KEY_H,
+		INPUT_KEY_I, INPUT_KEY_J, INPUT_KEY_K, INPUT_KEY_L, INPUT_KEY_M,
+		INPUT_KEY_N, INPUT_KEY_O, INPUT_KEY_P, INPUT_KEY_Q, INPUT_KEY_R,
+		INPUT_KEY_S, INPUT_KEY_T, INPUT_KEY_U, INPUT_KEY_V, INPUT_KEY_W,
+		INPUT_KEY_X, INPUT_KEY_Y, INPUT_KEY_Z};
+	for (unsigned int index = 0U; index < sizeof(codes) / sizeof(codes[0]); ++index)
+		if (codes[index] == code) return (char)('a' + index);
+	return 0;
+}
+
+static char input_symbol(u16 code, unsigned int shifted)
+{
+	static const char normal[] = "1234567890-=[]\\;',./`";
+	static const char shifted_symbols[] = "!@#$%^&*()_+{}|:\"<>?~";
+	if (code >= INPUT_KEY_1 && code <= INPUT_KEY_0)
+		return shifted != 0U ? shifted_symbols[code - INPUT_KEY_1] : normal[code - INPUT_KEY_1];
+	switch (code) {
+	case INPUT_KEY_MINUS: return shifted != 0U ? '_' : '-';
+	case INPUT_KEY_EQUAL: return shifted != 0U ? '+' : '=';
+	case INPUT_KEY_LEFT_BRACKET: return shifted != 0U ? '{' : '[';
+	case INPUT_KEY_RIGHT_BRACKET: return shifted != 0U ? '}' : ']';
+	case INPUT_KEY_BACKSLASH: return shifted != 0U ? '|' : '\\';
+	case INPUT_KEY_SEMICOLON: return shifted != 0U ? ':' : ';';
+	case INPUT_KEY_APOSTROPHE: return shifted != 0U ? '"' : '\'';
+	case INPUT_KEY_GRAVE: return shifted != 0U ? '~' : '`';
+	case INPUT_KEY_COMMA: return shifted != 0U ? '<' : ',';
+	case INPUT_KEY_DOT: return shifted != 0U ? '>' : '.';
+	case INPUT_KEY_SLASH: return shifted != 0U ? '?' : '/';
+	case INPUT_KEY_SPACE: return ' ';
+	default: return 0;
+	}
+}
+
+static int input_translate_key(u16 code, u32 value, struct key_event *result)
+{
+	char character = 0;
+	unsigned int shifted = input_device.shift;
+
+	if (code == INPUT_KEY_LEFT_SHIFT || code == INPUT_KEY_RIGHT_SHIFT) {
+		input_device.shift = value != 0U;
+		return 0;
+	}
+	if (code == INPUT_KEY_LEFT_CTRL || code == INPUT_KEY_RIGHT_CTRL) {
+		input_device.ctrl = value != 0U;
+		return 0;
+	}
+	if (value == 0U) return 0;
+	if (code == INPUT_KEY_ENTER) *result = (struct key_event){KEY_ENTER, 0, 0U};
+	else if (code == INPUT_KEY_BACKSPACE) *result = (struct key_event){KEY_BACKSPACE, 0, 0U};
+	else if (code == INPUT_KEY_DELETE) *result = (struct key_event){KEY_DELETE, 0, 0U};
+	else if (code == INPUT_KEY_UP) *result = (struct key_event){KEY_UP, 0, 0U};
+	else if (code == INPUT_KEY_DOWN) *result = (struct key_event){KEY_DOWN, 0, 0U};
+	else if (code == INPUT_KEY_LEFT) *result = (struct key_event){KEY_LEFT, 0, 0U};
+	else if (code == INPUT_KEY_RIGHT) *result = (struct key_event){KEY_RIGHT, 0, 0U};
+	else if (code == INPUT_KEY_HOME) *result = (struct key_event){KEY_HOME, 0, 0U};
+	else if (code == INPUT_KEY_END) *result = (struct key_event){KEY_END, 0, 0U};
+	else if (code == INPUT_KEY_ESC) *result = (struct key_event){KEY_ESCAPE, 0, 0U};
+	else if (code == INPUT_KEY_TAB) *result = (struct key_event){KEY_TAB, 0, 0U};
+	else {
+		character = input_letter(code);
+		if (character == 0) character = input_symbol(code, shifted);
+		if (character == 0) return 0;
+		if (shifted != 0U && character >= 'a' && character <= 'z')
+			character = (char)(character - 'a' + 'A');
+		*result = (struct key_event){KEY_CHAR, character, input_device.ctrl};
+	}
+	return 1;
+}
+
+static u8 input_config_byte(volatile u8 *base, u32 offset)
+{
+	return *(volatile u8 *)(base + V_CONFIG + offset);
+}
+
+static void input_config_select(volatile u8 *base, u8 select, u8 subselect)
+{
+	*(volatile u8 *)(base + V_CONFIG + INPUT_CONFIG_SELECT) = select;
+	*(volatile u8 *)(base + V_CONFIG + INPUT_CONFIG_SUBSELECT) = subselect;
+	barrier();
+}
+
+static int input_has_capability(volatile u8 *base, u8 type, u16 code)
+{
+	u32 word = (u32)code / 32U;
+	u32 bit = (u32)code % 32U;
+	input_config_select(base, INPUT_CONFIG_EV_BITS, type);
+	if ((u32)input_config_byte(base, INPUT_CONFIG_SIZE) < (u32)code / 8U + 1U) return 0;
+	return (rd32(base, V_CONFIG + INPUT_CONFIG_DATA + word * 4U) & (1U << bit)) != 0U;
+}
+
+static u32 input_abs_value(volatile u8 *base, u8 axis, u32 offset)
+{
+	input_config_select(base, INPUT_CONFIG_ABS_INFO, axis);
+	if ((u32)input_config_byte(base, INPUT_CONFIG_SIZE) < offset + 4U)
+		panic("invalid VirtIO input axis information");
+	return rd32(base, V_CONFIG + INPUT_CONFIG_DATA + offset);
+}
+
+static int input_is_pointer(volatile u8 *base, struct virtio_input_state *state)
+{
+	int absolute = input_has_capability(base, INPUT_EVENT_TYPE_ABS, INPUT_CODE_ABS_X) != 0 &&
+		input_has_capability(base, INPUT_EVENT_TYPE_ABS, INPUT_CODE_ABS_Y) != 0;
+	int relative = input_has_capability(base, INPUT_EVENT_TYPE_REL, INPUT_CODE_REL_X) != 0 &&
+		input_has_capability(base, INPUT_EVENT_TYPE_REL, INPUT_CODE_REL_Y) != 0;
+
+	state->absolute = absolute != 0 ? 1U : 0U;
+	state->relative = relative != 0 ? 1U : 0U;
+	if (absolute == 0 && relative == 0) return 0;
+	if (absolute != 0) {
+		state->x_min = input_abs_value(base, INPUT_CODE_ABS_X, 0U);
+		state->x_max = input_abs_value(base, INPUT_CODE_ABS_X, 4U);
+		state->y_min = input_abs_value(base, INPUT_CODE_ABS_Y, 0U);
+		state->y_max = input_abs_value(base, INPUT_CODE_ABS_Y, 4U);
+		if (state->x_max <= state->x_min || state->y_max <= state->y_min)
+			panic("invalid VirtIO input axis range");
+	}
+	state->x = display_width() == 0ULL ? 0U : (u32)(display_width() / 2ULL);
+	state->y = display_height() == 0ULL ? 0U : (u32)(display_height() / 2ULL);
+	return 1;
+}
+
+static int input_setup_device(volatile u8 *base, struct virtio_input_state *state)
+{
+	struct desc *descriptors;
+	struct avail *available;
+	u64 features;
+
+	state->base = base;
+	wr32(base, V_STATUS, 0U); wr32(base, V_STATUS, STATUS_ACK | STATUS_DRIVER);
+	wr32(base, V_DF_SEL, 0U); features = rd32(base, V_DF);
+	wr32(base, V_DF_SEL, 1U); features |= (u64)rd32(base, V_DF) << 32;
+	if ((features & F_VERSION_1) == 0ULL) return -1;
+	wr32(base, V_GF_SEL, 0U); wr32(base, V_GF, 0U);
+	wr32(base, V_GF_SEL, 1U); wr32(base, V_GF, (u32)(F_VERSION_1 >> 32));
+	wr32(base, V_STATUS, STATUS_ACK | STATUS_DRIVER | STATUS_FEATURES_OK);
+	if ((rd32(base, V_STATUS) & STATUS_FEATURES_OK) == 0U) return -1;
+	wr32(base, V_QSEL, INPUT_EVENT_QUEUE);
+	state->qsize = (u16)rd32(base, V_QMAX);
+	if (state->qsize > 8U) state->qsize = 8U;
+	if (state->qsize == 0U || pmm_alloc_page(&state->desc) != 0 ||
+		pmm_alloc_page(&state->avail) != 0 || pmm_alloc_page(&state->used) != 0 ||
+		pmm_alloc_page(&state->events) != 0) return -1;
+	clear_page(state->desc); clear_page(state->avail); clear_page(state->used); clear_page(state->events);
+	descriptors = (struct desc *)(unsigned long)state->desc;
+	available = (struct avail *)(unsigned long)state->avail;
+	for (u16 slot = 0U; slot < state->qsize; ++slot) {
+		descriptors[slot] = (struct desc){state->events + (u64)slot * 8ULL, 8U, DESC_WRITE, 0U};
+		available->rings[slot] = slot;
+	}
+	state->avail_index = state->qsize;
+	wr32(base, V_QNUM, state->qsize);
+	wr32(base, V_QDESC, (u32)state->desc); wr32(base, V_QDESC + 4U, (u32)(state->desc >> 32));
+	wr32(base, V_QDRIVER, (u32)state->avail); wr32(base, V_QDRIVER + 4U, (u32)(state->avail >> 32));
+	wr32(base, V_QDEVICE, (u32)state->used); wr32(base, V_QDEVICE + 4U, (u32)(state->used >> 32));
+	wr32(base, V_QREADY, 1U); barrier(); available->index = state->avail_index; barrier();
+	wr32(base, V_STATUS, STATUS_ACK | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
+	state->active = 1U;
+	return 0;
+}
+
+static int input_enable_features(volatile u8 *base)
+{
+	u64 features;
+
+	wr32(base, V_STATUS, 0U); wr32(base, V_STATUS, STATUS_ACK | STATUS_DRIVER);
+	wr32(base, V_DF_SEL, 0U); features = rd32(base, V_DF);
+	wr32(base, V_DF_SEL, 1U); features |= (u64)rd32(base, V_DF) << 32;
+	if ((features & F_VERSION_1) == 0ULL) return -1;
+	wr32(base, V_GF_SEL, 0U); wr32(base, V_GF, 0U);
+	wr32(base, V_GF_SEL, 1U); wr32(base, V_GF, (u32)(F_VERSION_1 >> 32));
+	wr32(base, V_STATUS, STATUS_ACK | STATUS_DRIVER | STATUS_FEATURES_OK);
+	return (rd32(base, V_STATUS) & STATUS_FEATURES_OK) != 0U ? 0 : -1;
+}
+
+static int virtio_pointer_init(void)
+{
+	struct virtio_mmio_info info[32];
+	unsigned int count = virtio_mmio_discover(info, 32U);
+
+	for (unsigned int index = 0U; index < count; ++index) {
+		volatile u8 *base = (volatile u8 *)(unsigned long)info[index].base;
+		struct virtio_input_state candidate = {0};
+		if (mmu_map_device_range(info[index].base, info[index].size) != 0) return -1;
+		if (rd32(base, V_MAGIC) != 0x74726976U || rd32(base, V_VERSION) != 2U ||
+			rd32(base, V_DEVICE_ID) != INPUT_DEVICE_ID || pointer_device.active != 0U) continue;
+		if (input_enable_features(base) != 0) return -1;
+		if (input_is_pointer(base, &candidate) == 0) continue;
+		candidate.pointer = 1U;
+		candidate.interrupt = info[index].interrupt;
+		if (input_setup_device(base, &candidate) != 0) return -1;
+		pointer_device = candidate;
+		console_write("virtio-input: pointer ready\r\n");
+	}
+	return 0;
+}
+
+int virtio_input_init(void)
+{
+	struct virtio_mmio_info info[32];
+	unsigned int count = virtio_mmio_discover(info, 32U);
+
+	input_device = (struct virtio_input_state){0};
+	pointer_device = (struct virtio_input_state){0};
+	for (unsigned int index = 0U; index < count; ++index) {
+		volatile u8 *base = (volatile u8 *)(unsigned long)info[index].base;
+		struct desc *descriptors;
+		struct avail *available;
+		if (mmu_map_device_range(info[index].base, info[index].size) != 0) return -1;
+		if (rd32(base, V_MAGIC) != 0x74726976U || rd32(base, V_VERSION) != 2U ||
+			rd32(base, V_DEVICE_ID) != INPUT_DEVICE_ID) continue;
+		if (input_enable_features(base) != 0) return -1;
+		{
+			struct virtio_input_state capabilities = {0};
+			if (input_is_pointer(base, &capabilities) != 0) continue;
+		}
+		input_device.base = base;
+		input_device.interrupt = info[index].interrupt;
+		wr32(base, V_STATUS, 0U);
+		wr32(base, V_STATUS, STATUS_ACK | STATUS_DRIVER);
+		wr32(base, V_DF_SEL, 0U);
+		{
+			u64 features = rd32(base, V_DF);
+			wr32(base, V_DF_SEL, 1U);
+			features |= (u64)rd32(base, V_DF) << 32;
+			if ((features & F_VERSION_1) == 0ULL) { input_device.active = 0U; return -1; }
+			wr32(base, V_GF_SEL, 0U); wr32(base, V_GF, 0U);
+			wr32(base, V_GF_SEL, 1U); wr32(base, V_GF, (u32)(F_VERSION_1 >> 32));
+		}
+		wr32(base, V_STATUS, STATUS_ACK | STATUS_DRIVER | STATUS_FEATURES_OK);
+		if ((rd32(base, V_STATUS) & STATUS_FEATURES_OK) == 0U) { input_device.active = 0U; return -1; }
+		wr32(base, V_QSEL, INPUT_EVENT_QUEUE);
+		input_device.qsize = (u16)rd32(base, V_QMAX);
+		if (input_device.qsize > 8U) input_device.qsize = 8U;
+		if (input_device.qsize == 0U || pmm_alloc_page(&input_device.desc) != 0 ||
+			pmm_alloc_page(&input_device.avail) != 0 || pmm_alloc_page(&input_device.used) != 0 ||
+			pmm_alloc_page(&input_device.events) != 0) return -1;
+		clear_page(input_device.desc); clear_page(input_device.avail);
+		clear_page(input_device.used); clear_page(input_device.events);
+		descriptors = (struct desc *)(unsigned long)input_device.desc;
+		available = (struct avail *)(unsigned long)input_device.avail;
+		for (u16 slot = 0U; slot < input_device.qsize; ++slot) {
+			descriptors[slot] = (struct desc){input_device.events + (u64)slot * 8ULL,
+				8U, DESC_WRITE, 0U};
+			available->rings[slot] = slot;
+		}
+		input_device.avail_index = input_device.qsize;
+		wr32(base, V_QNUM, input_device.qsize);
+		wr32(base, V_QDESC, (u32)input_device.desc); wr32(base, V_QDESC + 4U,
+			(u32)(input_device.desc >> 32));
+		wr32(base, V_QDRIVER, (u32)input_device.avail); wr32(base, V_QDRIVER + 4U,
+			(u32)(input_device.avail >> 32));
+		wr32(base, V_QDEVICE, (u32)input_device.used); wr32(base, V_QDEVICE + 4U,
+			(u32)(input_device.used >> 32));
+		wr32(base, V_QREADY, 1U);
+		barrier();
+		available->index = input_device.avail_index;
+		barrier();
+		wr32(base, V_STATUS, STATUS_ACK | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
+		input_device.active = 1U;
+		console_write("virtio-input: keyboard ready\r\n");
+		(void)virtio_pointer_init();
+		return 0;
+	}
+	return -1;
+}
+
+int virtio_input_available(void) { return input_device.active != 0U; }
+u64 virtio_input_interrupt(void) { return input_device.interrupt; }
+int virtio_pointer_available(void) { return pointer_device.active != 0U; }
+u64 virtio_pointer_interrupt(void) { return pointer_device.interrupt; }
+
+static u32 input_scale(u32 value, u32 minimum, u32 maximum, u64 size)
+{
+	if (value <= minimum) return 0U;
+	if (value >= maximum) return (u32)(size - 1ULL);
+	return (u32)(((u64)(value - minimum) * (size - 1ULL)) /
+		(u64)(maximum - minimum));
+}
+
+static void input_pointer_move(u32 x, u32 y)
+{
+	if (display_width() == 0ULL || display_height() == 0ULL) return;
+	pointer_device.x = x < display_width() ? x : (u32)(display_width() - 1ULL);
+	pointer_device.y = y < display_height() ? y : (u32)(display_height() - 1ULL);
+	(void)input_push_pointer_event((struct pointer_event){POINTER_MOVE,
+		pointer_device.x, pointer_device.y, pointer_device.buttons, 0});
+}
+
+static void input_translate_pointer(u16 code, u32 value)
+{
+	if (pointer_device.absolute != 0U && code == INPUT_CODE_ABS_X) {
+		input_pointer_move(input_scale(value, pointer_device.x_min, pointer_device.x_max,
+			display_width()), pointer_device.y);
+	} else if (pointer_device.absolute != 0U && code == INPUT_CODE_ABS_Y) {
+		input_pointer_move(pointer_device.x, input_scale(value, pointer_device.y_min,
+			pointer_device.y_max, display_height()));
+	} else if (pointer_device.relative != 0U && code == INPUT_CODE_REL_X) {
+		long long next = (long long)pointer_device.x + (long long)(int)value;
+		input_pointer_move(next < 0 ? 0U : (u32)next, pointer_device.y);
+	} else if (pointer_device.relative != 0U && code == INPUT_CODE_REL_Y) {
+		long long next = (long long)pointer_device.y + (long long)(int)value;
+		input_pointer_move(pointer_device.x, next < 0 ? 0U : (u32)next);
+	} else if (code == INPUT_CODE_BTN_LEFT || code == INPUT_CODE_BTN_RIGHT) {
+		unsigned int button = code == INPUT_CODE_BTN_LEFT ? POINTER_BUTTON_LEFT : POINTER_BUTTON_RIGHT;
+		if (value != 0U) pointer_device.buttons |= button;
+		else pointer_device.buttons &= ~button;
+		(void)input_push_pointer_event((struct pointer_event){value != 0U ? POINTER_BUTTON_DOWN : POINTER_BUTTON_UP,
+			pointer_device.x, pointer_device.y, pointer_device.buttons,
+			(enum pointer_button)button});
+	}
+}
+
+void virtio_input_handle_irq(void)
+{
+	volatile struct used *used;
+	struct avail *available;
+	if (input_device.active == 0U) return;
+	used = (volatile struct used *)(unsigned long)input_device.used;
+	available = (struct avail *)(unsigned long)input_device.avail;
+	{
+		u32 interrupt_status = rd32(input_device.base, V_INT_STATUS);
+		if (interrupt_status != 0U) wr32(input_device.base, V_INT_ACK, interrupt_status);
+	}
+	while (input_device.last_used != used->index) {
+		u16 ring = input_device.last_used % input_device.qsize;
+		u32 id = used->ring[ring].id;
+		struct virtio_input_event *raw;
+		struct key_event translated;
+		if (id >= input_device.qsize) { input_device.active = 0U; return; }
+		raw = (struct virtio_input_event *)(unsigned long)(input_device.events + (u64)id * 8ULL);
+		if (raw->type == INPUT_EVENT_TYPE_KEY && input_translate_key(raw->code, raw->value, &translated) != 0)
+			(void)input_push_event(translated);
+		available->rings[input_device.avail_index % input_device.qsize] = (u16)id;
+		++input_device.avail_index;
+		++input_device.last_used;
+	}
+	barrier();
+	available->index = input_device.avail_index;
+	barrier();
+	wr32(input_device.base, V_NOTIFY, INPUT_EVENT_QUEUE);
+}
+
+void virtio_pointer_handle_irq(void)
+{
+	volatile struct used *used;
+	struct avail *available;
+	if (pointer_device.active == 0U) return;
+	used = (volatile struct used *)(unsigned long)pointer_device.used;
+	available = (struct avail *)(unsigned long)pointer_device.avail;
+	{
+		u32 interrupt_status = rd32(pointer_device.base, V_INT_STATUS);
+		if (interrupt_status != 0U) wr32(pointer_device.base, V_INT_ACK, interrupt_status);
+	}
+	while (pointer_device.last_used != used->index) {
+		u16 ring = pointer_device.last_used % pointer_device.qsize;
+		u32 id = used->ring[ring].id;
+		struct virtio_input_event *raw;
+		if (id >= pointer_device.qsize) { pointer_device.active = 0U; return; }
+		raw = (struct virtio_input_event *)(unsigned long)(pointer_device.events + (u64)id * 8ULL);
+		if (raw->type == INPUT_EVENT_TYPE_ABS || raw->type == INPUT_EVENT_TYPE_REL ||
+			raw->type == INPUT_EVENT_TYPE_KEY)
+			input_translate_pointer(raw->code, raw->value);
+		available->rings[pointer_device.avail_index % pointer_device.qsize] = (u16)id;
+		++pointer_device.avail_index;
+		++pointer_device.last_used;
+	}
+	barrier();
+	available->index = pointer_device.avail_index;
+	barrier();
+	wr32(pointer_device.base, V_NOTIFY, INPUT_EVENT_QUEUE);
+}
+
+int virtio_input_self_test(void)
+{
+	struct key_event result;
+	static const u16 navigation[] = {INPUT_KEY_BACKSPACE, INPUT_KEY_DELETE,
+		INPUT_KEY_UP, INPUT_KEY_DOWN, INPUT_KEY_LEFT, INPUT_KEY_RIGHT,
+		INPUT_KEY_HOME, INPUT_KEY_END, INPUT_KEY_ESC, INPUT_KEY_TAB};
+	input_device.shift = 0U;
+	input_device.ctrl = 0U;
+	if (input_translate_key(INPUT_KEY_A, 1U, &result) == 0 || result.ch != 'a') return 0;
+	if (input_translate_key(INPUT_KEY_LEFT_SHIFT, 1U, &result) != 0 ||
+		input_device.shift == 0U) return 0;
+	if (input_translate_key(INPUT_KEY_A, 1U, &result) == 0 || result.ch != 'A') return 0;
+	if (input_translate_key(INPUT_KEY_LEFT_SHIFT, 0U, &result) != 0 ||
+		input_device.shift != 0U || input_translate_key(INPUT_KEY_A, 0U, &result) != 0) return 0;
+	if (input_translate_key(INPUT_KEY_LEFT_CTRL, 1U, &result) != 0) return 0;
+	if (input_translate_key(INPUT_KEY_S, 1U, &result) == 0 || result.ch != 's' || result.ctrl == 0U) return 0;
+	if (input_translate_key(INPUT_KEY_LEFT_CTRL, 0U, &result) != 0) return 0;
+	if (input_translate_key(INPUT_KEY_ENTER, 1U, &result) == 0 || result.code != KEY_ENTER) return 0;
+	for (unsigned int index = 0U; index < sizeof(navigation) / sizeof(navigation[0]); ++index)
+		if (input_translate_key(navigation[index], 1U, &result) == 0) return 0;
+	if (input_translate_key(INPUT_KEY_A, 2U, &result) == 0 || result.ch != 'a') return 0;
+	return 1;
 }

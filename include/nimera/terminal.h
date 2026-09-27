@@ -1,30 +1,10 @@
 #ifndef NIMERA_TERMINAL_H
 #define NIMERA_TERMINAL_H
 
-#include <nimera/types.h>
+#include <nimera/input.h>
 
 #define TERMINAL_DEFAULT_ROWS 25U
 #define TERMINAL_DEFAULT_COLUMNS 80U
-
-enum key_code {
-	KEY_CHAR,
-	KEY_ENTER,
-	KEY_BACKSPACE,
-	KEY_DELETE,
-	KEY_UP,
-	KEY_DOWN,
-	KEY_LEFT,
-	KEY_RIGHT,
-	KEY_HOME,
-	KEY_END,
-	KEY_ESCAPE
-};
-
-struct key_event {
-	enum key_code code;
-	char ch;
-	unsigned int ctrl;
-};
 
 struct key_event terminal_read_key(void);
 
