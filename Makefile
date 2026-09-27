@@ -51,6 +51,7 @@ PIPE_TEST ?= 0
 COMMAND_TEST ?= 0
 REDIRECTION_TEST ?= 0
 JOBS_TEST ?= 0
+GRAPHICS_TEST ?= 0
 TERMINAL_APP_TEST ?= 0
 TERMINAL_FAULT_TEST ?= 0
 TERMINAL_CHECK_TEST ?= 0
@@ -143,6 +144,7 @@ CFLAGS := \
 	-DNIMERA_COMMAND_TEST=$(COMMAND_TEST) \
 	-DNIMERA_REDIRECTION_TEST=$(REDIRECTION_TEST) \
 	-DNIMERA_JOBS_TEST=$(JOBS_TEST) \
+	-DNIMERA_GRAPHICS_TEST=$(GRAPHICS_TEST) \
 	-DNIMERA_TERMINAL_APP_TEST=$(TERMINAL_APP_TEST) \
 	-DNIMERA_TERMINAL_FAULT_TEST=$(TERMINAL_FAULT_TEST) \
 	-DNIMERA_TERMINAL_CHECK_TEST=$(TERMINAL_CHECK_TEST) \
@@ -156,7 +158,7 @@ LDFLAGS := \
 	-z max-page-size=0x1000 \
 	-Map=$(MAP)
 
-OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/exception-vector.o $(BUILD_DIR)/halt.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/terminal.o $(BUILD_DIR)/editor.o $(BUILD_DIR)/elf.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/exception.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/irq.o $(BUILD_DIR)/scheduler.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/nimfs.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/arch-irq.o $(BUILD_DIR)/mmu.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/qemu-memory.o $(BUILD_DIR)/qemu-irq.o $(BUILD_DIR)/qemu-virtio.o $(BUILD_DIR)/gic.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/heap.o $(BUILD_DIR)/format.o $(BUILD_DIR)/shell.o $(BUILD_DIR)/block.o $(BUILD_DIR)/uart.o $(BUILD_DIR)/arch-exception.o $(BUILD_DIR)/user-test.o $(BUILD_DIR)/user-syscall.o
+OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/exception-vector.o $(BUILD_DIR)/halt.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/display.o $(BUILD_DIR)/graphics.o $(BUILD_DIR)/terminal.o $(BUILD_DIR)/editor.o $(BUILD_DIR)/elf.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/exception.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/irq.o $(BUILD_DIR)/scheduler.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/nimfs.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/arch-irq.o $(BUILD_DIR)/mmu.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/qemu-memory.o $(BUILD_DIR)/qemu-irq.o $(BUILD_DIR)/qemu-virtio.o $(BUILD_DIR)/gic.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/heap.o $(BUILD_DIR)/format.o $(BUILD_DIR)/shell.o $(BUILD_DIR)/block.o $(BUILD_DIR)/uart.o $(BUILD_DIR)/arch-exception.o $(BUILD_DIR)/user-test.o $(BUILD_DIR)/user-syscall.o
 
 ifneq ($(ELF_INSTALL_TEST),0)
 OBJECTS += $(BUILD_DIR)/hello-payload.o
@@ -180,6 +182,8 @@ endif
 
 build: $(ELF)
 
+.PHONY: run-graphics
+
 $(ELF): $(OBJECTS) linker.ld | $(BUILD_DIR)/.dir
 	$(LD) $(LDFLAGS) -o $@ $(OBJECTS)
 
@@ -192,10 +196,16 @@ $(BUILD_DIR)/exception-vector.o: arch/aarch64/exception.S | $(BUILD_DIR)/.dir
 $(BUILD_DIR)/halt.o: arch/aarch64/halt.S | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/main.o: kernel/main.c include/nimera/block.h include/nimera/editor.h include/nimera/elf.h include/nimera/exception.h include/nimera/format.h include/nimera/heap.h include/nimera/irq.h include/nimera/memory.h include/nimera/mmu.h include/nimera/nimfs.h include/nimera/panic.h include/nimera/pipe.h include/nimera/pmm.h include/nimera/process.h include/nimera/scheduler.h include/nimera/shell.h include/nimera/terminal.h include/nimera/timer.h include/nimera/user.h include/nimera/vfs.h include/nimera/virtio.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/main.o: kernel/main.c include/nimera/block.h include/nimera/editor.h include/nimera/elf.h include/nimera/exception.h include/nimera/format.h include/nimera/graphics.h include/nimera/heap.h include/nimera/irq.h include/nimera/memory.h include/nimera/mmu.h include/nimera/nimfs.h include/nimera/panic.h include/nimera/pipe.h include/nimera/pmm.h include/nimera/process.h include/nimera/scheduler.h include/nimera/shell.h include/nimera/terminal.h include/nimera/timer.h include/nimera/user.h include/nimera/vfs.h include/nimera/virtio.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/console.o: kernel/console.c include/nimera/console.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/display.o: kernel/display.c include/nimera/display.h include/nimera/types.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/graphics.o: kernel/graphics.c include/nimera/console.h include/nimera/display.h include/nimera/graphics.h include/nimera/timer.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/terminal.o: kernel/terminal.c include/nimera/console.h include/nimera/format.h include/nimera/irq.h include/nimera/terminal.h include/nimera/timer.h | $(BUILD_DIR)/.dir
@@ -374,7 +384,7 @@ $(BUILD_DIR)/qemu-memory.o: platform/qemu-virt/memory.c include/nimera/memory.h 
 $(BUILD_DIR)/qemu-irq.o: platform/qemu-virt/irq.c include/nimera/irq.h include/nimera/panic.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/qemu-virtio.o: platform/qemu-virt/virtio.c include/nimera/block.h include/nimera/mmu.h include/nimera/panic.h include/nimera/pmm.h include/nimera/types.h include/nimera/virtio.h | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/qemu-virtio.o: platform/qemu-virt/virtio.c include/nimera/block.h include/nimera/display.h include/nimera/mmu.h include/nimera/panic.h include/nimera/pmm.h include/nimera/types.h include/nimera/virtio.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/gic.o: platform/qemu-virt/gic.c include/nimera/irq.h include/nimera/panic.h | $(BUILD_DIR)/.dir
@@ -423,6 +433,11 @@ run:
 		-monitor none \
 		-serial stdio \
 		-device loader,file=build-run/baremetal-aarch64.elf,cpu-num=0
+
+run-graphics: disk-create
+	rm -rf build-graphics
+	$(MAKE) BUILD_DIR=build-graphics GRAPHICS_TEST=1 BLOCK_TEST=0 NIMFS_BOOT=0 NIMFS_FORMAT_TEST=0 build
+	$(QEMU) -machine $(QEMU_MACHINE) -m $(QEMU_MEMORY) -cpu cortex-a72 -display cocoa -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(STORAGE_IMAGE),format=raw,id=nimera-disk -device virtio-blk-device,drive=nimera-disk -device virtio-gpu-device -device loader,file=build-graphics/baremetal-aarch64.elf,cpu-num=0
 
 run-panic:
 	$(MAKE) BUILD_DIR=build-panic PANIC_TEST=1 TIMER_TEST=0 MEMORY_TEST=0 EXCEPTION_TEST=0 PMM_TEST=0 HEAP_TEST=0 MMU_TEST=0 MMU_FAULT_TEST=0 PROTECTION_TEST=0 PROTECTION_WRITE_TEST=0 PROTECTION_EXEC_TEST=0 build
@@ -858,4 +873,4 @@ run-mounts: nimfs-root-reset nimfs-data-reset
 	$(QEMU) -machine $(QEMU_MACHINE) -m 128M -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_DATA_IMAGE),format=raw,id=nimfs-data -device virtio-blk-device,drive=nimfs-data -drive if=none,file=$(NIMFS_ROOT_IMAGE),format=raw,id=nimfs-root -device virtio-blk-device,drive=nimfs-root -device loader,file=build-mounts/baremetal-aarch64.elf,cpu-num=0
 
 clean:
-	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-user build-user-protection build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume build-elf build-elf-format build-elf-test build-elf-test2 build-user-files build-user-format build-shell-user build-shell-terminal build-commands build-command-format build-terminal-app build-terminal-format build-terminal-fault build-user-terminal build-user-terminal-format build-user-editor build-user-editor-format build-user-editor-test build-user-editor-shell build-user-utils build-processes build-pipes build-redirection build-jobs build-jobs-interactive build-user-app build-user-app-test build-utils build-utils-format
+	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-user build-user-protection build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume build-elf build-elf-format build-elf-test build-elf-test2 build-user-files build-user-format build-shell-user build-shell-terminal build-commands build-command-format build-terminal-app build-terminal-format build-terminal-fault build-user-terminal build-user-terminal-format build-user-editor build-user-editor-format build-user-editor-test build-user-editor-shell build-user-utils build-processes build-pipes build-redirection build-jobs build-jobs-interactive build-graphics build-user-app build-user-app-test build-utils build-utils-format

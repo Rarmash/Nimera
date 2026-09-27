@@ -12,5 +12,6 @@ struct virtio_mmio_info {
 unsigned int virtio_mmio_discover(struct virtio_mmio_info *infos,
 					unsigned int capacity);
 int virtio_block_init(void);
+int virtio_gpu_init(void);
 
 #endif

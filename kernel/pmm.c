@@ -190,6 +190,28 @@ int pmm_alloc_page(u64 *physical_address)
 	return -1;
 }
 
+int pmm_alloc_contiguous(u64 page_count, u64 *physical_address)
+{
+	if (initialized == 0U || page_count == 0ULL) return -1;
+	for (u64 start = 0ULL; start + page_count <= total_page_count; ++start) {
+		unsigned int free = 1U;
+		for (u64 offset = 0ULL; offset < page_count; ++offset)
+			if ((page_bitmap[(start + offset) / 8ULL] &
+				(1U << ((start + offset) % 8ULL))) != 0U) {
+				free = 0U;
+				break;
+			}
+		if (free == 0U) continue;
+		for (u64 offset = 0ULL; offset < page_count; ++offset)
+			page_bitmap[(start + offset) / 8ULL] |=
+				(unsigned char)(1U << ((start + offset) % 8ULL));
+		free_page_count -= page_count;
+		*physical_address = bit_to_page(start);
+		return 0;
+	}
+	return -1;
+}
+
 void pmm_free_page(u64 physical_address)
 {
 	u64 bit_index;

@@ -1,6 +1,7 @@
 // No libc, allocator, or runtime are needed for this milestone.
 
 #include <nimera/console.h>
+#include <nimera/graphics.h>
 #include <nimera/block.h>
 #include <nimera/editor.h>
 #include <nimera/elf.h>
@@ -1152,6 +1153,11 @@ void kernel_main(void)
 	heap_init();
 	block_init();
 	(void)virtio_block_init();
+	(void)virtio_gpu_init();
+
+#if NIMERA_GRAPHICS_TEST
+	graphics_test();
+#endif
 
 #if NIMERA_NIMFS_FORMAT_TEST
 	{

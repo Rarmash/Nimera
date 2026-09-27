@@ -8,6 +8,7 @@
 void pmm_init(const struct memory_map *map);
 
 int pmm_alloc_page(u64 *physical_address);
+int pmm_alloc_contiguous(u64 page_count, u64 *physical_address);
 void pmm_free_page(u64 physical_address);
 
 u64 pmm_total_pages(void);

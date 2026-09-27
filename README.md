@@ -500,6 +500,22 @@ signals, process groups, stopping, or background terminal input yet.
 
 `make run-jobs` runs the isolated job acceptance path with `/apps/jobtest`.
 
+## First graphics output
+
+`make run-graphics` adds QEMU's `virtio-gpu-device` alongside the existing
+VirtIO block device. The platform driver discovers the GPU through the
+VirtIO-MMIO nodes described by the Device Tree, asks it for display information,
+and uses scanout 0. Nimera allocates a guest-owned, writable and non-executable
+XRGB-like 32-bit framebuffer, draws a small software test pattern, and sends it
+to the device with the 2D commands `TRANSFER_TO_HOST_2D` and `RESOURCE_FLUSH`.
+The current pixel layout is B8G8R8X8 in little-endian memory; the alpha byte is
+unused. The UART shell remains the only interactive console.
+
+This is a display output path, not a GUI, window system, compositor, graphical
+terminal, or userspace graphics API. The GPU is optional: ordinary `make run`
+continues to work without it, while `make run-graphics` opens a QEMU graphics
+window and also checks that block and GPU VirtIO devices coexist.
+
 `edit <path>` launches the standalone EL0 NimEdit 0.2 from `/apps/edit`. It
 loads or creates a VFS file, uses a growable flat ASCII byte buffer in
 userspace memory, and supports Enter, Backspace, Delete, arrows, Home, End,
@@ -1080,6 +1096,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 ├── include/
 │   └── nimera/
 │       ├── console.h
+│       ├── display.h
+│       ├── graphics.h
 │       ├── exception.h
 │       ├── format.h
 │       ├── halt.h
@@ -1187,6 +1205,10 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `include/nimera/types.h` — the minimal freestanding `u64` type definition.
 - `kernel/console.c` — delegates the common console API to the current UART
   implementation.
+- `kernel/display.c` — minimal platform-independent framebuffer/display state
+  and rectangular flush API.
+- `kernel/graphics.c` — bounds-safe software drawing primitives, tiny bitmap
+  text rendering, and the first graphics test pattern.
 - `kernel/elf.c` — validates supported ELF64 program headers, builds the
   bounded argv stack, creates process-owned mappings, and owns per-process
   cwd, file handles, and dynamic allocations.
@@ -1246,8 +1268,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `virt`; TX is polling, while RX drains into the fixed interrupt-side ring and
   wakes the blocked console consumer. It also exposes nonblocking access to
   already-buffered bytes for terminal sequence lookahead.
-- `platform/qemu-virt/virtio.c` — bounded DTB discovery and the synchronous
-  multi-device modern VirtIO block backend; it is not a filesystem driver.
+- `platform/qemu-virt/virtio.c` — bounded DTB discovery, shared modern VirtIO
+  MMIO discovery, synchronous block I/O, and the minimal VirtIO-GPU 2D path.
 - `platform/qemu-virt/irq.c` — minimal DTB discovery of the GICv2 MMIO ranges
   and the architected timer PPI.
 - `platform/qemu-virt/gic.c` — minimal one-CPU GICv2 setup, acknowledge, and
@@ -1268,7 +1290,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `run-user-editor`, `run-user-editor-test`, `run-user-utils`, `run-block`,
   `disk-create`,
   `disk-reset`, `run-terminal-app-format`, `run-terminal-app`,
-  `run-terminal-fault`, `run-user-terminal`, and `clean`. Test builds use
+  `run-terminal-fault`, `run-user-terminal`, `run-graphics`, and `clean`. Test builds use
   separate directories so their compile-time paths cannot contaminate `make
   run`; `run-jobs` uses `build-jobs/` for the background-job test.
 - `README.md` — project status, workflow, and design notes.
