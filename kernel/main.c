@@ -937,12 +937,27 @@ irq_enable();
 
 #if NIMERA_ELF_RUN_TEST
 	{
-		enum elf_result elf_result = elf_load_user(vfs_root(), "/apps/hello");
+		enum elf_result elf_result = elf_load_user(vfs_root(), "/apps/hello",
+			(const struct elf_argument *)0, 0U);
 		if (elf_result != ELF_OK) panic(elf_error_string(elf_result));
 		console_write("ELF loader test: entering /apps/hello\r\n");
 		scheduler_block_current();
 		while (elf_user_task_active() != 0) arch_wait_for_event();
 		console_write("ELF loader test: task exited\r\n");
+		return;
+	}
+#endif
+
+#if NIMERA_USER_FILES_TEST
+	{
+		struct elf_argument argument = {"/apps/filetest", 14ULL};
+		enum elf_result elf_result = elf_load_user(vfs_root(), argument.text,
+			&argument, 1U);
+		if (elf_result != ELF_OK) panic(elf_error_string(elf_result));
+		console_write("Userspace file syscall test: entering /apps/filetest\r\n");
+		scheduler_block_current();
+		while (elf_user_task_active() != 0) arch_wait_for_event();
+		console_write("Userspace file syscall test: task exited\r\n");
 		return;
 	}
 #endif

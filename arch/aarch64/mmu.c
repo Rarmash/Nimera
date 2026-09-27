@@ -533,6 +533,21 @@ int mmu_user_readable_range(u64 address, u64 length)
 	return 1;
 }
 
+int mmu_user_writable_range(u64 address, u64 length)
+{
+	u64 end;
+	if (length == 0ULL) return 1;
+	if (address > ~0ULL - length) return 0;
+	end = address + length;
+	for (u64 page = page_align_down(address); page < end;
+	     page += NIMERA_PAGE_SIZE) {
+		descriptor_t descriptor = lookup_descriptor(page);
+		u64 ap = (descriptor >> 6) & 3ULL;
+		if ((descriptor & DESC_VALID) == 0ULL || ap != 1ULL) return 0;
+	}
+	return 1;
+}
+
 int mmu_map_user_page(u64 virtual_address, u64 physical_address,
 			 unsigned int permissions)
 {

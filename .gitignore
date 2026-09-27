@@ -36,3 +36,7 @@ build-user-app/
 build-elf/
 build-elf-format/
 build-elf-test/
+build-elf-test2/
+build-user-files/
+build-user-format/
+build-shell-user/

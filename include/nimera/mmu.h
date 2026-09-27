@@ -12,6 +12,7 @@ u64 mmu_page_table_pages(void);
 u64 mmu_l3_table_pages(void);
 int mmu_validate_protections(const void *heap_pointer);
 int mmu_user_readable_range(u64 address, u64 length);
+int mmu_user_writable_range(u64 address, u64 length);
 #define MMU_USER_READ  1U
 #define MMU_USER_WRITE 2U
 #define MMU_USER_EXEC  4U

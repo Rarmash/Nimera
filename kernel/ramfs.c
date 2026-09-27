@@ -24,8 +24,12 @@ static enum vfs_error ramfs_mkdir(struct vfs_node *directory, const char *name,
 					  struct vfs_node **result);
 static enum vfs_error ramfs_read(struct vfs_node *file, char *buffer,
 					 u64 capacity, u64 *size);
+static enum vfs_error ramfs_read_at(struct vfs_node *file, u64 offset,
+					char *buffer, u64 length, u64 *completed);
 static enum vfs_error ramfs_write(struct vfs_node *file, const char *data,
 					  u64 size);
+static enum vfs_error ramfs_write_at(struct vfs_node *file, u64 offset,
+					 const char *data, u64 length);
 static enum vfs_error ramfs_append(struct vfs_node *file, const char *data,
 					   u64 size);
 static enum vfs_error ramfs_remove(struct vfs_node *node);
@@ -42,8 +46,11 @@ static const struct vfs_operations ramfs_operations = {
 	.mkdir = ramfs_mkdir,
 	.create = ramfs_create_file,
 	.read = ramfs_read,
+	.read_at = ramfs_read_at,
 	.write = ramfs_write,
+	.write_at = ramfs_write_at,
 	.append = ramfs_append,
+	.release = (void (*)(struct vfs_node *))0,
 	.remove = ramfs_remove,
 	.rename = ramfs_rename,
 	.move = ramfs_move
@@ -240,6 +247,23 @@ static enum vfs_error ramfs_read(struct vfs_node *file, char *buffer,
 	return VFS_OK;
 }
 
+static enum vfs_error ramfs_read_at(struct vfs_node *file, u64 offset,
+					char *buffer, u64 length, u64 *completed)
+{
+	struct ramfs_node *node;
+	u64 available;
+
+	if (file->type == VFS_NODE_DIRECTORY) return VFS_IS_DIRECTORY;
+	node = ramfs_from_vfs(file);
+	if (offset > node->size) return VFS_INVALID_PATH;
+	available = node->size - offset;
+	if (length > available) length = available;
+	for (u64 index = 0ULL; index < length; ++index)
+		buffer[index] = node->contents[offset + index];
+	*completed = length;
+	return VFS_OK;
+}
+
 static enum vfs_error ramfs_resize(struct ramfs_node *node, u64 size)
 {
 	u64 capacity = node->capacity;
@@ -289,6 +313,26 @@ static enum vfs_error ramfs_write(struct vfs_node *file, const char *data,
 		node->contents[index] = data[index];
 	}
 	node->size = size;
+	return VFS_OK;
+}
+
+static enum vfs_error ramfs_write_at(struct vfs_node *file, u64 offset,
+					 const char *data, u64 length)
+{
+	struct ramfs_node *node;
+	enum vfs_error error;
+	u64 end;
+
+	if (file->type == VFS_NODE_DIRECTORY) return VFS_IS_DIRECTORY;
+	node = ramfs_from_vfs(file);
+	if (offset > node->size) return VFS_INVALID_PATH;
+	if (length > ~0ULL - offset) return VFS_TOO_LARGE;
+	end = offset + length;
+	error = ramfs_resize(node, end);
+	if (error != VFS_OK) return error;
+	for (u64 index = 0ULL; index < length; ++index)
+		node->contents[offset + index] = data[index];
+	if (end > node->size) node->size = end;
 	return VFS_OK;
 }
 

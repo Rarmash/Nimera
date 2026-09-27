@@ -104,9 +104,9 @@ segments become EL0 read-only/NX. The loader zeroes BSS tails and creates a
 
 Only one dynamically loaded user task exists at a time. After exit or an EL0
 fault, its mappings, code/data pages, stack pages, and temporary image state
-are released. There are still no processes, PIDs, argv, separate address
-spaces, `fork`, `exec`, relocations, PIE, shared libraries, or userspace file
-descriptors. The current loader image limit is 64 KiB and the current test
+are released. There are still no processes, PIDs, separate address
+spaces, `fork`, `exec`, relocations, PIE, shared libraries, or userspace directory
+operations. The current loader image limit is 64 KiB and the current test
 program demonstrates both console output and zero-initialized BSS.
 
 ## Boot flow
@@ -244,11 +244,19 @@ x0..x5   arguments
 x0       return value
 ```
 
-Only two syscall numbers exist so far: `SYS_write_console = 1`, which accepts
-a validated user pointer and length, and `SYS_exit = 2`. User code calls the
-small stubs in `user/syscall.S`; it does not link against `console_write()` or
-any other kernel symbol. The kernel checks pointer overflow and requires the
-entire range to lie in a readable user mapping before reading it.
+The ABI currently provides `SYS_write_console = 1`, `SYS_exit = 2`, and the
+minimal file calls `SYS_open`, `SYS_read`, `SYS_write`, and `SYS_close`. Paths
+are passed as pointer-plus-length pairs; the kernel validates and copies them.
+Each dynamic user task has a fixed 16-entry handle table containing its VFS
+node, current offset, and access flags. Handles are released on close and on
+task exit. User code calls small assembly stubs and does not link against
+kernel symbols or libc. Bad user pointers return an error instead of panicking.
+
+The loader now constructs an argv array and strings on the user stack. `run`
+splits at spaces/tabs, supports at most eight arguments and 256 argument bytes,
+and passes `argc`, `argv`, and a terminating null pointer in the usual AArch64
+registers. Quoting, environment variables, pipes, and redirection are not
+implemented.
 
 The same saved exception frame is used for EL1 kernel threads and EL0 tasks.
 It contains the general registers, `ELR_EL1`, `SPSR_EL1`, `SP_EL0`, `ESR_EL1`,
@@ -299,6 +307,16 @@ nimera:/ $
 For a non-interactive loader regression, `make run-elf-test` boots the same
 image and waits for `/apps/hello` to exit automatically. The normal shell
 path remains `run /apps/hello`; the loader only reads the file through VFS.
+`make user-app` also builds `/apps/cat` and `/apps/filetest`. The isolated
+`make run-user-files` target runs `filetest`, which exercises open/create,
+truncate, multi-call writes, read-back, and close through the VFS syscall
+boundary. Its image must first be formatted with `make run-elf-format`.
+
+Range I/O is the small common VFS extension used by these syscalls. RAMFS and
+NimFS support reads and writes at a file offset, including partial sectors and
+file extension without sparse holes. It is not a cache or a general file API;
+there are still no directory, `chdir`, delete, rename, standard-stream, or
+process syscalls.
 
 NimEdit 0.1 is entered with the shell command `edit <path>`. It is a kernel
 application, not a userspace process: it uses the common terminal and VFS APIs
@@ -923,11 +941,14 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │   ├── timer.c
 │   └── vfs.c
 ├── user/
-│   └── apps/hello/
-│       ├── main.c
-│       ├── start.S
-│       ├── syscall.S
-│       └── linker.ld
+│   ├── include/nimera/user.h
+│   ├── runtime/
+│   │   ├── start.S
+│   │   └── syscall.S
+│   └── apps/
+│       ├── hello/
+│       ├── cat/
+│       └── filetest/
 └── platform/
     └── qemu-virt/
         ├── gic.c
@@ -980,14 +1001,16 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `include/nimera/types.h` — the minimal freestanding `u64` type definition.
 - `kernel/console.c` — delegates the common console API to the current UART
   implementation.
-- `kernel/elf.c` — validates supported ELF64 program headers, allocates/maps
-  the one dynamic EL0 task, loads BSS, and releases its pages after exit.
+- `kernel/elf.c` — validates supported ELF64 program headers, builds the
+  bounded argv stack, allocates/maps the one dynamic EL0 task, and owns its
+  fixed userspace file-handle table.
 - `kernel/block.c` — registers and dispatches the small generic block-device
   set; it contains no VirtIO register knowledge.
 - `kernel/nimfs.c` — the small versioned whole-disk filesystem and VFS backend;
   it contains no VirtIO queue knowledge.
-- `user/apps/hello/` — the separately linked freestanding ELF test program;
-  its build artifacts are kept outside the source tree in `build-user-app/`.
+- `user/runtime/` — the tiny freestanding user entry point and syscall stubs.
+- `user/apps/` — separately linked `hello`, `cat`, and file-syscall test ELF
+  programs; artifacts are kept outside the source tree in `build-user-app/`.
 - `kernel/terminal.c` — bounded ANSI key decoding, one-shot geometry
   detection, fallback, and pending input; it does not access PL011 directly.
 - `kernel/exception.c` — prints synchronous-exception diagnostics through the

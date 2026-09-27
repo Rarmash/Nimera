@@ -250,14 +250,20 @@ static enum vfs_error nf_mkdir(struct vfs_node *, const char *,
 static enum vfs_error nf_create(struct vfs_node *, const char *, const char *,
                                 u64, struct vfs_node **);
 static enum vfs_error nf_read(struct vfs_node *, char *, u64, u64 *);
+static enum vfs_error nf_read_at(struct vfs_node *, u64, char *, u64, u64 *);
 static enum vfs_error nf_write(struct vfs_node *, const char *, u64);
+static enum vfs_error nf_write_at(struct vfs_node *, u64, const char *, u64);
 static enum vfs_error nf_append(struct vfs_node *, const char *, u64);
+static void nf_release(struct vfs_node *);
 static enum vfs_error nf_remove(struct vfs_node *);
 static enum vfs_error nf_rename(struct vfs_node *, const char *);
 static enum vfs_error nf_move(struct vfs_node *, struct vfs_node *);
 static const struct vfs_operations ops = {
-    nf_lookup, nf_readdir, nf_mkdir,  nf_create, nf_read,
-    nf_write,  nf_append,  nf_remove, nf_rename, nf_move};
+    .lookup = nf_lookup, .readdir = nf_readdir, .mkdir = nf_mkdir,
+    .create = nf_create, .read = nf_read, .read_at = nf_read_at,
+    .write = nf_write, .write_at = nf_write_at, .append = nf_append,
+    .remove = nf_remove, .rename = nf_rename, .move = nf_move,
+    .release = nf_release};
 
 static struct vfs_node *root;
 static struct nimfs_node root_nodes[NIMFS_MAX_CONTEXTS];
@@ -466,6 +472,94 @@ static enum vfs_error nf_read(struct vfs_node *f, char *out, u64 cap,
   *size = in->size;
   return VFS_OK;
 }
+
+static enum vfs_error nf_read_at(struct vfs_node *f, u64 offset, char *out,
+                                 u64 length, u64 *completed) {
+  active_context = node_of(f)->context;
+  struct nimfs_inode *in = &fs.inodes[node_of(f)->inode];
+  if (f->type == VFS_NODE_DIRECTORY) return VFS_IS_DIRECTORY;
+  if (offset > in->size) return VFS_INVALID_PATH;
+  if (length > in->size - offset) length = in->size - offset;
+  for (u64 i = 0; i < length; ++i) {
+    u64 position = offset + i;
+    if (position % 512ULL == 0 &&
+        disk_read(in->blocks[position / 512ULL], io_buffer) != 0)
+      return VFS_NOT_FOUND;
+    out[i] = (char)io_buffer[position % 512ULL];
+  }
+  *completed = length;
+  return VFS_OK;
+}
+
+static enum vfs_error nf_write_at(struct vfs_node *f, u64 offset,
+                                  const char *data, u64 length) {
+  struct nimfs_inode *in;
+  u64 end;
+  unsigned int old_need;
+  unsigned int need;
+  unsigned int added = 0U;
+
+  active_context = node_of(f)->context;
+  if (f->type == VFS_NODE_DIRECTORY) return VFS_IS_DIRECTORY;
+  in = &fs.inodes[node_of(f)->inode];
+  if (offset > in->size) return VFS_INVALID_PATH;
+  if (length > ~0ULL - offset) return VFS_TOO_LARGE;
+  end = offset + length;
+  if (end > NIMFS_FILE_MAX) return VFS_TOO_LARGE;
+  if (length == 0ULL && offset == 0ULL) {
+    for (unsigned int index = 0U; index < NIMFS_DIRECT; ++index) {
+      if (in->blocks[index] != 0U) free_block(in->blocks[index]);
+      in->blocks[index] = 0U;
+    }
+    in->size = 0ULL;
+    return save_inode(node_of(f)->inode) == 0 ? VFS_OK : VFS_IO_ERROR;
+  }
+  old_need = (unsigned int)((in->size + 511ULL) / 512ULL);
+  need = (unsigned int)((end + 511ULL) / 512ULL);
+  while (old_need + added < need) {
+    u32 block;
+    if (alloc_block(&block) != 0) {
+      while (added != 0U) {
+        --added;
+        free_block(in->blocks[old_need + added]);
+        in->blocks[old_need + added] = 0U;
+      }
+      return VFS_NO_MEMORY;
+    }
+    in->blocks[old_need + added] = block;
+    zero(io_buffer, NIMFS_BLOCK_SIZE);
+    if (disk_write(block, io_buffer) != 0) {
+      free_block(block);
+      in->blocks[old_need + added] = 0U;
+      while (added != 0U) {
+        --added;
+        free_block(in->blocks[old_need + added]);
+        in->blocks[old_need + added] = 0U;
+      }
+      return VFS_IO_ERROR;
+    }
+    ++added;
+  }
+  for (u64 i = 0ULL; i < length;) {
+    u64 position = offset + i;
+    u64 in_block = position % 512ULL;
+    u64 part = 512ULL - in_block;
+    if (part > length - i) part = length - i;
+    if (in_block != 0ULL || part != 512ULL) {
+      if (disk_read(in->blocks[position / 512ULL], io_buffer) != 0)
+        return VFS_IO_ERROR;
+    } else {
+      zero(io_buffer, NIMFS_BLOCK_SIZE);
+    }
+    for (u64 j = 0ULL; j < part; ++j) io_buffer[in_block + j] =
+      (unsigned char)data[i + j];
+    if (disk_write(in->blocks[position / 512ULL], io_buffer) != 0)
+      return VFS_IO_ERROR;
+    i += part;
+  }
+  if (end > in->size) in->size = end;
+  return save_inode(node_of(f)->inode) == 0 ? VFS_OK : VFS_IO_ERROR;
+}
 static enum vfs_error nf_write(struct vfs_node *f, const char *d, u64 n) {
   active_context = node_of(f)->context;
   if (f->type == VFS_NODE_DIRECTORY)
@@ -485,6 +579,10 @@ static enum vfs_error nf_append(struct vfs_node *f, const char *d, u64 n) {
   for (u64 i = 0; i < n; ++i)
     append_buffer[size + i] = (unsigned char)d[i];
   return nf_write(f, (const char *)append_buffer, size + n);
+}
+
+static void nf_release(struct vfs_node *node) {
+  kfree(node_of(node));
 }
 static enum vfs_error nf_remove(struct vfs_node *f) {
   active_context = node_of(f)->context;

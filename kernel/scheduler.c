@@ -142,6 +142,12 @@ struct irq_frame *scheduler_schedule(struct irq_frame *current_frame)
 
 void scheduler_enable_user_task(u64 entry, u64 stack_top, u64 argument)
 {
+	scheduler_enable_user_task_argv(entry, stack_top, argument, 0ULL);
+}
+
+void scheduler_enable_user_task_argv(u64 entry, u64 stack_top, u64 argc,
+				     u64 argv)
+{
 	struct irq_frame *frame = (struct irq_frame *)(void *)
 		(user_kernel_stack + WORKER_STACK_SIZE - sizeof(struct irq_frame));
 
@@ -149,7 +155,8 @@ void scheduler_enable_user_task(u64 entry, u64 stack_top, u64 argument)
 		panic("invalid user task setup");
 	}
 	for (unsigned int index = 0U; index < 31U; ++index) frame->x[index] = 0ULL;
-	frame->x[0] = argument;
+	frame->x[0] = argc;
+	frame->x[1] = argv;
 	frame->x[30] = 0ULL;
 	frame->elr = entry;
 	frame->spsr = 0ULL; /* EL0t with interrupts unmasked. */

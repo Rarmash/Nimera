@@ -428,6 +428,28 @@ enum vfs_error vfs_get_size(struct vfs_node *file, u64 *size)
 	return error == VFS_TOO_LARGE || error == VFS_OK ? VFS_OK : error;
 }
 
+enum vfs_error vfs_read_at(struct vfs_node *file, u64 offset, char *buffer,
+			   u64 length, u64 *completed)
+{
+	if (file == (struct vfs_node *)0 || file->operations->read_at == 0)
+		return VFS_IO_ERROR;
+	return file->operations->read_at(file, offset, buffer, length, completed);
+}
+
+enum vfs_error vfs_write_at(struct vfs_node *file, u64 offset,
+			    const char *data, u64 length)
+{
+	if (file == (struct vfs_node *)0 || file->operations->write_at == 0)
+		return VFS_IO_ERROR;
+	return file->operations->write_at(file, offset, data, length);
+}
+
+void vfs_node_release(struct vfs_node *node)
+{
+	if (node != (struct vfs_node *)0 && node->operations->release != 0)
+		node->operations->release(node);
+}
+
 static int vfs_current_or_ancestor(struct vfs_node *node,
 					   struct vfs_node *cwd)
 {
@@ -684,6 +706,7 @@ const char *vfs_error_string(enum vfs_error error)
 	case VFS_ALREADY_EXISTS: return "Already exists";
 	case VFS_NO_MEMORY: return "Out of memory";
 	case VFS_TOO_LARGE: return "Path or file is too large";
+	case VFS_IO_ERROR: return "Filesystem I/O error";
 	case VFS_NOT_EMPTY: return "Directory is not empty";
 	case VFS_BUSY: return "Volume is busy";
 	case VFS_CROSS_DEVICE: return "Cannot move across filesystems";

@@ -45,6 +45,8 @@ int scheduler_worker_saw_shell_waiting(void);
 int scheduler_stack_ok(void);
 void scheduler_test(void);
 void scheduler_enable_user_task(u64 entry, u64 stack_top, u64 argument);
+void scheduler_enable_user_task_argv(u64 entry, u64 stack_top, u64 argc,
+				     u64 argv);
 struct irq_frame *scheduler_terminate_current(struct irq_frame *frame);
 int scheduler_user_done(void);
 long long scheduler_user_exit_status(void);

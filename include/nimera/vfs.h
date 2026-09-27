@@ -24,7 +24,8 @@ enum vfs_error {
 	VFS_NOT_EMPTY,
 	VFS_BUSY,
 	VFS_CROSS_DEVICE,
-	VFS_NOT_MOUNTED
+	VFS_NOT_MOUNTED,
+	VFS_IO_ERROR
 };
 
 struct vfs_node;
@@ -41,8 +42,13 @@ struct vfs_operations {
 				struct vfs_node **result);
 	enum vfs_error (*read)(struct vfs_node *file, char *buffer, u64 capacity,
 			      u64 *size);
+	enum vfs_error (*read_at)(struct vfs_node *file, u64 offset,
+				 char *buffer, u64 length, u64 *completed);
 	enum vfs_error (*write)(struct vfs_node *file, const char *data, u64 size);
+	enum vfs_error (*write_at)(struct vfs_node *file, u64 offset,
+				  const char *data, u64 length);
 	enum vfs_error (*append)(struct vfs_node *file, const char *data, u64 size);
+	void (*release)(struct vfs_node *node);
 	enum vfs_error (*remove)(struct vfs_node *node);
 	enum vfs_error (*rename)(struct vfs_node *node, const char *name);
 	enum vfs_error (*move)(struct vfs_node *node, struct vfs_node *directory);
@@ -87,6 +93,11 @@ enum vfs_error vfs_readdir(struct vfs_node *directory, unsigned int index,
 enum vfs_error vfs_read(struct vfs_node *file, char *buffer, u64 capacity,
 				u64 *size);
 enum vfs_error vfs_get_size(struct vfs_node *file, u64 *size);
+enum vfs_error vfs_read_at(struct vfs_node *file, u64 offset, char *buffer,
+			   u64 length, u64 *completed);
+enum vfs_error vfs_write_at(struct vfs_node *file, u64 offset,
+			    const char *data, u64 length);
+void vfs_node_release(struct vfs_node *node);
 enum vfs_error vfs_touch(struct vfs_node *cwd, const char *path,
 			 struct vfs_node **result);
 enum vfs_error vfs_write(struct vfs_node *cwd, const char *path,

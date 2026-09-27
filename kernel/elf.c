@@ -1,4 +1,5 @@
 #include <nimera/elf.h>
+#include <nimera/abi/syscall.h>
 #include <nimera/mmu.h>
 #include <nimera/pmm.h>
 #include <nimera/scheduler.h>
@@ -28,6 +29,24 @@ static unsigned int page_count;
 static unsigned int active;
 static unsigned char image_storage[ELF_MAX_FILE_SIZE];
 static char *image;
+static struct vfs_node *user_cwd;
+
+#define ELF_MAX_HANDLES 16U
+struct user_handle {
+	unsigned int in_use;
+	struct vfs_node *node;
+	u64 offset;
+	u64 flags;
+};
+static struct user_handle handles[ELF_MAX_HANDLES];
+
+static void clear_handle(unsigned int index)
+{
+	handles[index].in_use = 0U;
+	handles[index].node = (struct vfs_node *)0;
+	handles[index].offset = 0ULL;
+	handles[index].flags = 0ULL;
+}
 
 static u16 read16(const unsigned char *p)
 {
@@ -109,7 +128,67 @@ static unsigned int segment_permissions(u32 flags)
 	return (flags & PF_X) != 0U ? MMU_USER_READ | MMU_USER_EXEC : MMU_USER_READ;
 }
 
-enum elf_result elf_load_user(struct vfs_node *cwd, const char *path)
+static unsigned char *stack_address(u64 address)
+{
+	struct loaded_page *page = find_page(align_down(address));
+	if (page == (struct loaded_page *)0) return (unsigned char *)0;
+	return (unsigned char *)(unsigned long)(page->physical_address +
+		(address - page->virtual_address));
+}
+
+static int stack_put_byte(u64 address, unsigned char value)
+{
+	unsigned char *destination = stack_address(address);
+	if (destination == (unsigned char *)0) return -1;
+	*destination = value;
+	return 0;
+}
+
+static int stack_put_u64(u64 address, u64 value)
+{
+	for (unsigned int index = 0U; index < 8U; ++index)
+		if (stack_put_byte(address + index, (unsigned char)(value >> (index * 8U))) != 0)
+			return -1;
+	return 0;
+}
+
+static int build_user_stack(const struct elf_argument *arguments,
+		unsigned int count, u64 *argc, u64 *argv)
+{
+	u64 values[ELF_MAX_ARGUMENTS + 1U];
+	u64 sp = ELF_USER_LIMIT;
+	u64 total = 0ULL;
+	if (count > ELF_MAX_ARGUMENTS) return -1;
+	for (unsigned int index = 0U; index < count; ++index) {
+		if (arguments[index].text == (const char *)0 ||
+			arguments[index].length > ELF_MAX_ARGUMENT_BYTES - total)
+			return -1;
+		total += arguments[index].length;
+	}
+	for (unsigned int reverse = count; reverse > 0U; --reverse) {
+		unsigned int index = reverse - 1U;
+		if (sp < ELF_STACK_BASE + arguments[index].length + 1ULL) return -1;
+		sp -= arguments[index].length + 1ULL;
+		values[index] = sp;
+		for (u64 byte = 0ULL; byte < arguments[index].length; ++byte)
+			if (stack_put_byte(sp + byte,
+				(unsigned char)arguments[index].text[byte]) != 0) return -1;
+		if (stack_put_byte(sp + arguments[index].length, 0U) != 0) return -1;
+	}
+	values[count] = 0ULL;
+	sp &= ~15ULL;
+	if (sp < ELF_STACK_BASE + (u64)(count + 1U) * 8ULL) return -1;
+	sp -= (u64)(count + 1U) * 8ULL;
+	sp &= ~15ULL;
+	for (unsigned int index = 0U; index <= count; ++index)
+		if (stack_put_u64(sp + (u64)index * 8ULL, values[index]) != 0) return -1;
+	*argc = count;
+	*argv = sp;
+	return 0;
+}
+
+enum elf_result elf_load_user(struct vfs_node *cwd, const char *path,
+		const struct elf_argument *arguments, unsigned int argument_count)
 {
 	struct vfs_node *file;
 	u64 size = 0ULL;
@@ -122,16 +201,22 @@ enum elf_result elf_load_user(struct vfs_node *cwd, const char *path)
 	enum vfs_error vfs_result;
 
 	if (active != 0U) return ELF_BUSY;
+	if (argument_count != 0U && arguments == (const struct elf_argument *)0)
+		return ELF_INVALID;
 	vfs_result = vfs_resolve(cwd, path, &file);
 	if (vfs_result != VFS_OK) return ELF_NOT_FOUND;
-	if (vfs_node_type(file) != VFS_NODE_FILE) return ELF_INVALID;
+	if (vfs_node_type(file) != VFS_NODE_FILE) {
+		vfs_node_release(file); return ELF_INVALID;
+	}
 	if (vfs_get_size(file, &size) != VFS_OK || size < 64ULL ||
-	    size > ELF_MAX_FILE_SIZE)
-		return ELF_INVALID;
+		size > ELF_MAX_FILE_SIZE) {
+		vfs_node_release(file); return ELF_INVALID;
+	}
 	image = (char *)(void *)image_storage;
 	if (vfs_read(file, image, size, &size) != VFS_OK) {
-		image = (char *)0; return ELF_IO;
+		vfs_node_release(file); image = (char *)0; return ELF_IO;
 	}
+	vfs_node_release(file);
 	{
 		const unsigned char *h = (const unsigned char *)(const void *)image;
 		if (h[0] != 0x7fU || h[1] != 'E' || h[2] != 'L' || h[3] != 'F' ||
@@ -209,21 +294,33 @@ enum elf_result elf_load_user(struct vfs_node *cwd, const char *path)
 			clear_loaded_pages(); image = (char *)0; return ELF_NO_MEMORY;
 		}
 	}
-	for (unsigned int index = 0U; index < page_count; ++index)
-		if (mmu_map_user_page(pages[index].virtual_address,
-				pages[index].physical_address, pages[index].permissions) != 0) {
+	{
+		u64 argc;
+		u64 argv;
+		if (build_user_stack(arguments, argument_count, &argc, &argv) != 0) {
 			clear_loaded_pages(); image = (char *)0; return ELF_INVALID;
 		}
-	active = 1U;
-	scheduler_enable_user_task(entry, ELF_USER_LIMIT, 0ULL);
-	return ELF_OK;
+		for (unsigned int index = 0U; index < ELF_MAX_HANDLES; ++index)
+			clear_handle(index);
+		user_cwd = cwd;
+		for (unsigned int index = 0U; index < page_count; ++index)
+			if (mmu_map_user_page(pages[index].virtual_address,
+				pages[index].physical_address, pages[index].permissions) != 0) {
+				clear_loaded_pages(); image = (char *)0; return ELF_INVALID;
+			}
+		active = 1U;
+		scheduler_enable_user_task_argv(entry, ELF_USER_LIMIT, argc, argv);
+		return ELF_OK;
+	}
 }
 
 void elf_user_task_finished(void)
 {
 	if (active == 0U) return;
+	elf_user_close_all();
 	clear_loaded_pages();
 	image = (char *)0;
+	user_cwd = (struct vfs_node *)0;
 	active = 0U;
 }
 
@@ -244,22 +341,136 @@ const char *elf_error_string(enum elf_result result)
 u64 elf_user_base(void) { return ELF_USER_BASE; }
 u64 elf_user_limit(void) { return ELF_USER_LIMIT; }
 
+static long long user_vfs_error(enum vfs_error error)
+{
+	if (error == VFS_NOT_FOUND) return NIMERA_NERR_NOT_FOUND;
+	if (error == VFS_NO_MEMORY) return NIMERA_NERR_NO_MEMORY;
+	if (error == VFS_IS_DIRECTORY) return NIMERA_NERR_IS_DIRECTORY;
+	if (error == VFS_TOO_LARGE) return NIMERA_NERR_TOO_LARGE;
+	return NIMERA_NERR_IO;
+}
+
+long long elf_user_open(const char *path, u64 flags)
+{
+	struct vfs_node *node;
+	u64 size = 0ULL;
+	unsigned int slot;
+	unsigned int access = (unsigned int)(flags & (NIMERA_OPEN_READ | NIMERA_OPEN_WRITE));
+	enum vfs_error error;
+	if (active == 0U || user_cwd == (struct vfs_node *)0 || path == (const char *)0 ||
+		(access != NIMERA_OPEN_READ && access != NIMERA_OPEN_WRITE) ||
+		(flags & ~(NIMERA_OPEN_READ | NIMERA_OPEN_WRITE | NIMERA_OPEN_CREATE |
+		NIMERA_OPEN_TRUNCATE | NIMERA_OPEN_APPEND)) != 0ULL ||
+		((flags & (NIMERA_OPEN_TRUNCATE | NIMERA_OPEN_APPEND)) != 0ULL &&
+		 (flags & NIMERA_OPEN_WRITE) == 0ULL)) return NIMERA_NERR_INVALID;
+	error = vfs_resolve(user_cwd, path, &node);
+	if (error != VFS_OK && (flags & NIMERA_OPEN_CREATE) != 0ULL &&
+		(flags & NIMERA_OPEN_WRITE) != 0ULL)
+		error = vfs_create_file(user_cwd, path, (const char *)0, 0ULL, &node);
+	if (error != VFS_OK) return user_vfs_error(error);
+	if (vfs_node_type(node) != VFS_NODE_FILE) {
+		vfs_node_release(node); return NIMERA_NERR_IS_DIRECTORY;
+	}
+	if ((flags & NIMERA_OPEN_TRUNCATE) != 0ULL) {
+		error = vfs_write_at(node, 0ULL, (const char *)0, 0ULL);
+		if (error != VFS_OK) { vfs_node_release(node); return user_vfs_error(error); }
+	}
+	if (vfs_get_size(node, &size) != VFS_OK) { vfs_node_release(node); return NIMERA_NERR_IO; }
+	for (slot = 0U; slot < ELF_MAX_HANDLES && handles[slot].in_use != 0U; ++slot) {}
+	if (slot == ELF_MAX_HANDLES) { vfs_node_release(node); return NIMERA_NERR_NO_HANDLES; }
+	handles[slot].in_use = 1U;
+	handles[slot].node = node;
+	handles[slot].offset = (flags & NIMERA_OPEN_APPEND) != 0ULL ? size : 0ULL;
+	handles[slot].flags = flags;
+	return (long long)slot;
+}
+
+long long elf_user_read(unsigned int handle, char *buffer, u64 length)
+{
+	u64 completed = 0ULL;
+	enum vfs_error error;
+	if (handle >= ELF_MAX_HANDLES || handles[handle].in_use == 0U ||
+		(handles[handle].flags & NIMERA_OPEN_READ) == 0ULL ||
+		buffer == (char *)0) return NIMERA_NERR_BAD_HANDLE;
+	error = vfs_read_at(handles[handle].node, handles[handle].offset,
+		buffer, length, &completed);
+	if (error != VFS_OK) return user_vfs_error(error);
+	handles[handle].offset += completed;
+	return (long long)completed;
+}
+
+long long elf_user_write(unsigned int handle, const char *buffer, u64 length)
+{
+	u64 offset;
+	enum vfs_error error;
+	if (handle >= ELF_MAX_HANDLES || handles[handle].in_use == 0U ||
+		(handles[handle].flags & NIMERA_OPEN_WRITE) == 0ULL ||
+		(length != 0ULL && buffer == (const char *)0)) return NIMERA_NERR_BAD_HANDLE;
+	offset = handles[handle].offset;
+	if ((handles[handle].flags & NIMERA_OPEN_APPEND) != 0ULL &&
+		vfs_get_size(handles[handle].node, &offset) != VFS_OK) return NIMERA_NERR_IO;
+	error = vfs_write_at(handles[handle].node, offset, buffer, length);
+	if (error != VFS_OK) return user_vfs_error(error);
+	handles[handle].offset = offset + length;
+	return (long long)length;
+}
+
+long long elf_user_close(unsigned int handle)
+{
+	if (handle >= ELF_MAX_HANDLES || handles[handle].in_use == 0U)
+		return NIMERA_NERR_BAD_HANDLE;
+	vfs_node_release(handles[handle].node);
+	clear_handle(handle);
+	return 0LL;
+}
+
+void elf_user_close_all(void)
+{
+	for (unsigned int index = 0U; index < ELF_MAX_HANDLES; ++index)
+		if (handles[index].in_use != 0U) (void)elf_user_close(index);
+}
+
+unsigned int elf_user_open_count(void)
+{
+	unsigned int count = 0U;
+	for (unsigned int index = 0U; index < ELF_MAX_HANDLES; ++index) count += handles[index].in_use;
+	return count;
+}
+
 int elf_install_test_payload(struct vfs_node *root)
 {
 #if NIMERA_ELF_INSTALL_TEST
 	extern const unsigned char _binary_build_user_app_hello_elf_start[];
 	extern const unsigned char _binary_build_user_app_hello_elf_end[];
-	struct vfs_node *node;
-	enum vfs_error result;
-	u64 size = (u64)(_binary_build_user_app_hello_elf_end -
-		_binary_build_user_app_hello_elf_start);
-
-	if (vfs_resolve(root, "/apps/hello", &node) == VFS_OK) {
-		return vfs_node_type(node) == VFS_NODE_FILE ? 0 : -1;
+	extern const unsigned char _binary_build_user_app_cat_elf_start[];
+	extern const unsigned char _binary_build_user_app_cat_elf_end[];
+	extern const unsigned char _binary_build_user_app_filetest_elf_start[];
+	extern const unsigned char _binary_build_user_app_filetest_elf_end[];
+	struct { const char *path; const unsigned char *start; const unsigned char *end; }
+		payloads[] = {
+			{"/apps/hello", _binary_build_user_app_hello_elf_start,
+			 _binary_build_user_app_hello_elf_end},
+			{"/apps/cat", _binary_build_user_app_cat_elf_start,
+			 _binary_build_user_app_cat_elf_end},
+			{"/apps/filetest", _binary_build_user_app_filetest_elf_start,
+			 _binary_build_user_app_filetest_elf_end}
+		};
+	for (unsigned int index = 0U; index < sizeof(payloads) / sizeof(payloads[0]); ++index) {
+		struct vfs_node *node;
+		u64 size = (u64)(payloads[index].end - payloads[index].start);
+		enum vfs_error result = vfs_resolve(root, payloads[index].path, &node);
+		if (result == VFS_OK) {
+			if (vfs_node_type(node) != VFS_NODE_FILE) {
+				vfs_node_release(node); return -1;
+			}
+			vfs_node_release(node);
+			continue;
+		}
+		result = vfs_create_file(root, payloads[index].path,
+			(const char *)payloads[index].start, size, &node);
+		if (result != VFS_OK) return -1;
 	}
-	result = vfs_create_file(root, "/apps/hello",
-		(const char *)_binary_build_user_app_hello_elf_start, size, &node);
-	return result == VFS_OK ? 0 : -1;
+	return 0;
 #else
 	(void)root;
 	return 0;

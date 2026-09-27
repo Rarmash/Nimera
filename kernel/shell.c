@@ -222,12 +222,37 @@ static void shell_eject(const char *argument)
 static void shell_run_program(const char *argument)
 {
 	enum elf_result result;
+	struct elf_argument arguments[ELF_MAX_ARGUMENTS];
+	unsigned int count = 0U;
+	unsigned int total = 0U;
+	const char *cursor = argument;
 
 	if (argument == (const char *)0 || argument[0] == '\0') {
 		console_write("Usage: run <path>\r\n");
 		return;
 	}
-	result = elf_load_user(shell_cwd, argument);
+	while (*cursor != '\0') {
+		const char *start;
+		while (*cursor == ' ' || *cursor == '\t') ++cursor;
+		if (*cursor == '\0') break;
+		if (count == ELF_MAX_ARGUMENTS) {
+			console_write("run: arguments too large\r\n"); return;
+		}
+		start = cursor;
+		while (*cursor != '\0' && *cursor != ' ' && *cursor != '\t') ++cursor;
+		arguments[count].text = start;
+		arguments[count].length = (u64)(cursor - start);
+		if (arguments[count].length > ELF_MAX_ARGUMENT_BYTES - total) {
+			console_write("run: arguments too large\r\n"); return;
+		}
+		total += (unsigned int)arguments[count].length;
+		++count;
+		if (*cursor != '\0') {
+			*(char *)(unsigned long)cursor = '\0';
+			++cursor;
+		}
+	}
+	result = elf_load_user(shell_cwd, arguments[0].text, arguments, count);
 	if (result != ELF_OK) {
 		console_write("run: "); console_write(elf_error_string(result));
 		console_write("\r\n");
