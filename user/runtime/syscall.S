@@ -1,8 +1,13 @@
 	.section .text, "ax", %progbits
 	.balign 4
+.global nimera_write_console
+nimera_write_console:
+	mov x8, #1
+	svc #0
+	ret
 	.global nimera_write
 nimera_write:
-	mov x8, #1
+	mov x8, #5
 	svc #0
 	ret
 	.global nimera_exit

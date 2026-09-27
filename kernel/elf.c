@@ -4,6 +4,7 @@
 #include <nimera/abi/syscall.h>
 #include <nimera/mmu.h>
 #include <nimera/pmm.h>
+#include <nimera/pipe.h>
 #include <nimera/process.h>
 #include <nimera/scheduler.h>
 #include <nimera/terminal.h>
@@ -111,12 +112,48 @@ static struct process *allocate_process(void)
 
 static void clear_handle(unsigned int index)
 {
+	if (handles[index].in_use != 0U && handles[index].type == PROCESS_HANDLE_PIPE_READ)
+		pipe_reader_close(handles[index].pipe);
+	if (handles[index].in_use != 0U && handles[index].type == PROCESS_HANDLE_PIPE_WRITE)
+		pipe_writer_close(handles[index].pipe);
 	handles[index].in_use = 0U;
-	handles[index].type = 0U;
+	handles[index].type = PROCESS_HANDLE_NONE;
 	handles[index].node = (struct vfs_node *)0;
+	handles[index].pipe = (struct pipe *)0;
 	handles[index].offset = 0ULL;
 	handles[index].flags = 0ULL;
 }
+
+#undef handles
+static void initialize_standard_handles(struct process *process,
+	const struct process_stdio *stdio)
+{
+	for (unsigned int index = 0U; index < ELF_MAX_HANDLES; ++index)
+		clear_handle(index);
+	process->handles[NIMERA_STDIN].in_use = 1U;
+	process->handles[NIMERA_STDIN].type = PROCESS_HANDLE_NONE;
+	process->handles[NIMERA_STDOUT].in_use = 1U;
+	process->handles[NIMERA_STDOUT].type = PROCESS_HANDLE_CONSOLE_OUTPUT;
+	process->handles[NIMERA_STDERR].in_use = 1U;
+	process->handles[NIMERA_STDERR].type = PROCESS_HANDLE_CONSOLE_OUTPUT;
+	if (stdio == (const struct process_stdio *)0) return;
+	if (stdio->stdin_pipe != (struct pipe *)0) {
+		process->handles[NIMERA_STDIN].type = PROCESS_HANDLE_PIPE_READ;
+		process->handles[NIMERA_STDIN].pipe = stdio->stdin_pipe;
+		pipe_reader_open(stdio->stdin_pipe);
+	}
+	if (stdio->stdout_pipe != (struct pipe *)0) {
+		process->handles[NIMERA_STDOUT].type = PROCESS_HANDLE_PIPE_WRITE;
+		process->handles[NIMERA_STDOUT].pipe = stdio->stdout_pipe;
+		pipe_writer_open(stdio->stdout_pipe);
+	}
+	if (stdio->stderr_pipe != (struct pipe *)0) {
+		process->handles[NIMERA_STDERR].type = PROCESS_HANDLE_PIPE_WRITE;
+		process->handles[NIMERA_STDERR].pipe = stdio->stderr_pipe;
+		pipe_writer_open(stdio->stderr_pipe);
+	}
+}
+#define handles (operation_process()->handles)
 
 static u16 read16(const unsigned char *p)
 {
@@ -296,6 +333,14 @@ static int build_user_stack(const struct elf_argument *arguments,
 enum elf_result elf_load_user(struct vfs_node *cwd, const char *path,
 		const struct elf_argument *arguments, unsigned int argument_count)
 {
+	return elf_load_user_with_stdio(cwd, path, arguments, argument_count,
+		(const struct process_stdio *)0);
+}
+
+enum elf_result elf_load_user_with_stdio(struct vfs_node *cwd, const char *path,
+		const struct elf_argument *arguments, unsigned int argument_count,
+		const struct process_stdio *stdio)
+{
 	struct vfs_node *file;
 	u64 size = 0ULL;
 	u64 entry;
@@ -422,8 +467,7 @@ enum elf_result elf_load_user(struct vfs_node *cwd, const char *path,
 		if (build_user_stack(arguments, argument_count, &argc, &argv) != 0) {
 			clear_loaded_pages(); image = (char *)0; discard_process(process); return ELF_INVALID;
 		}
-		for (unsigned int index = 0U; index < ELF_MAX_HANDLES; ++index)
-			clear_handle(index);
+		initialize_standard_handles(process, stdio);
 		user_cwd = cwd;
 		if (vfs_format_path(cwd, user_cwd_path, sizeof(user_cwd_path)) != VFS_OK) {
 			clear_loaded_pages(); image = (char *)0; user_cwd = (struct vfs_node *)0;
@@ -451,6 +495,11 @@ void process_mark_exit(struct process *process, long long status)
 {
 	if (process == (struct process *)0) return;
 	process->exit_status = status;
+	/* Endpoint references must disappear at exit so readers can observe EOF
+	 * before the shell eventually reaps the zombie process. */
+	loading_process = process;
+	elf_user_close_all();
+	loading_process = (struct process *)0;
 	process->state = PROCESS_ZOMBIE;
 }
 
@@ -610,8 +659,9 @@ long long elf_user_open(const char *path, u64 flags)
 	for (slot = 0U; slot < ELF_MAX_HANDLES && handles[slot].in_use != 0U; ++slot) {}
 	if (slot == ELF_MAX_HANDLES) { vfs_node_release(node); return NIMERA_NERR_NO_HANDLES; }
 	handles[slot].in_use = 1U;
-	handles[slot].type = VFS_NODE_FILE;
+	handles[slot].type = PROCESS_HANDLE_VFS_FILE;
 	handles[slot].node = node;
+	handles[slot].pipe = (struct pipe *)0;
 	handles[slot].offset = (flags & NIMERA_OPEN_APPEND) != 0ULL ? size : 0ULL;
 	handles[slot].flags = flags;
 	return (long long)slot;
@@ -632,8 +682,9 @@ long long elf_user_open_directory(const char *path)
 	for (slot = 0U; slot < ELF_MAX_HANDLES && handles[slot].in_use != 0U; ++slot) {}
 	if (slot == ELF_MAX_HANDLES) { vfs_node_release(node); return NIMERA_NERR_NO_HANDLES; }
 	handles[slot].in_use = 1U;
-	handles[slot].type = VFS_NODE_DIRECTORY;
+	handles[slot].type = PROCESS_HANDLE_VFS_DIRECTORY;
 	handles[slot].node = node;
+	handles[slot].pipe = (struct pipe *)0;
 	handles[slot].offset = 0ULL;
 	handles[slot].flags = 0ULL;
 	return (long long)slot;
@@ -643,8 +694,11 @@ long long elf_user_read(unsigned int handle, char *buffer, u64 length)
 {
 	u64 completed = 0ULL;
 	enum vfs_error error;
+	if (handle < ELF_MAX_HANDLES && handles[handle].in_use != 0U &&
+		handles[handle].type == PROCESS_HANDLE_PIPE_READ)
+		return pipe_read_try(handles[handle].pipe, buffer, length);
 	if (handle >= ELF_MAX_HANDLES || handles[handle].in_use == 0U ||
-		handles[handle].type != VFS_NODE_FILE ||
+		handles[handle].type != PROCESS_HANDLE_VFS_FILE ||
 		(handles[handle].flags & NIMERA_OPEN_READ) == 0ULL ||
 		buffer == (char *)0) return NIMERA_NERR_BAD_HANDLE;
 	error = vfs_read_at(handles[handle].node, handles[handle].offset,
@@ -658,8 +712,17 @@ long long elf_user_write(unsigned int handle, const char *buffer, u64 length)
 {
 	u64 offset;
 	enum vfs_error error;
+	if (handle < ELF_MAX_HANDLES && handles[handle].in_use != 0U) {
+		if (handles[handle].type == PROCESS_HANDLE_PIPE_WRITE)
+			return pipe_write_try(handles[handle].pipe, buffer, length);
+		if (handles[handle].type == PROCESS_HANDLE_CONSOLE_OUTPUT) {
+			if (length != 0ULL && buffer == (const char *)0) return NIMERA_NERR_INVALID;
+			for (u64 index = 0ULL; index < length; ++index) console_putc(buffer[index]);
+			return (long long)length;
+		}
+	}
 	if (handle >= ELF_MAX_HANDLES || handles[handle].in_use == 0U ||
-		handles[handle].type != VFS_NODE_FILE ||
+		handles[handle].type != PROCESS_HANDLE_VFS_FILE ||
 		(handles[handle].flags & NIMERA_OPEN_WRITE) == 0ULL ||
 		(length != 0ULL && buffer == (const char *)0)) return NIMERA_NERR_BAD_HANDLE;
 	offset = handles[handle].offset;
@@ -678,7 +741,7 @@ long long elf_user_read_directory(unsigned int handle,
 	struct vfs_node *child;
 	enum vfs_error error;
 	if (handle >= ELF_MAX_HANDLES || handles[handle].in_use == 0U ||
-		handles[handle].type != VFS_NODE_DIRECTORY || entry == (struct nimera_dir_entry *)0)
+		handles[handle].type != PROCESS_HANDLE_VFS_DIRECTORY || entry == (struct nimera_dir_entry *)0)
 		return NIMERA_NERR_BAD_HANDLE;
 	node = handles[handle].node;
 	error = vfs_readdir(node, (unsigned int)handles[handle].offset, &child);
@@ -732,9 +795,25 @@ long long elf_user_close(unsigned int handle)
 {
 	if (handle >= ELF_MAX_HANDLES || handles[handle].in_use == 0U)
 		return NIMERA_NERR_BAD_HANDLE;
-	vfs_node_release(handles[handle].node);
+	if (handles[handle].type == PROCESS_HANDLE_VFS_FILE ||
+		handles[handle].type == PROCESS_HANDLE_VFS_DIRECTORY)
+		vfs_node_release(handles[handle].node);
 	clear_handle(handle);
 	return 0LL;
+}
+
+enum process_handle_type elf_user_handle_type(unsigned int handle)
+{
+	if (handle >= ELF_MAX_HANDLES || handles[handle].in_use == 0U)
+		return PROCESS_HANDLE_NONE;
+	return handles[handle].type;
+}
+
+struct pipe *elf_user_handle_pipe(unsigned int handle)
+{
+	if (handle >= ELF_MAX_HANDLES || handles[handle].in_use == 0U)
+		return (struct pipe *)0;
+	return handles[handle].pipe;
 }
 
 void elf_user_close_all(void)
@@ -785,6 +864,10 @@ int elf_install_test_payload(struct vfs_node *root)
 	extern const unsigned char _binary_build_user_app_proctest_elf_end[];
 	extern const unsigned char _binary_build_user_app_procfault_elf_start[];
 	extern const unsigned char _binary_build_user_app_procfault_elf_end[];
+	extern const unsigned char _binary_build_user_app_upper_elf_start[];
+	extern const unsigned char _binary_build_user_app_upper_elf_end[];
+	extern const unsigned char _binary_build_user_app_pipetest_elf_start[];
+	extern const unsigned char _binary_build_user_app_pipetest_elf_end[];
 	#if NIMERA_TERMINAL_APP_TEST || NIMERA_TERMINAL_FAULT_TEST || NIMERA_TERMINAL_CHECK_TEST
 	extern const unsigned char _binary_build_user_app_keytest_elf_start[];
 	extern const unsigned char _binary_build_user_app_keytest_elf_end[];
@@ -826,7 +909,11 @@ int elf_install_test_payload(struct vfs_node *root)
 			{"/apps/proctest", _binary_build_user_app_proctest_elf_start,
 			 _binary_build_user_app_proctest_elf_end},
 			{"/apps/procfault", _binary_build_user_app_procfault_elf_start,
-			 _binary_build_user_app_procfault_elf_end}
+			 _binary_build_user_app_procfault_elf_end},
+			{"/apps/upper", _binary_build_user_app_upper_elf_start,
+			 _binary_build_user_app_upper_elf_end},
+			{"/apps/pipetest", _binary_build_user_app_pipetest_elf_start,
+			 _binary_build_user_app_pipetest_elf_end}
 			#if NIMERA_TERMINAL_APP_TEST || NIMERA_TERMINAL_FAULT_TEST || NIMERA_TERMINAL_CHECK_TEST
 			,{"/apps/keytest", _binary_build_user_app_keytest_elf_start,
 			 _binary_build_user_app_keytest_elf_end},

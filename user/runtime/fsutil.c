@@ -9,7 +9,7 @@ unsigned long long nimera_text_length(const char *text)
 
 void nimera_print(const char *text)
 {
-	(void)nimera_write(text, nimera_text_length(text));
+	(void)nimera_write(NIMERA_STDOUT, text, nimera_text_length(text));
 }
 
 void nimera_print_u64(unsigned long long value)
@@ -48,7 +48,7 @@ long long nimera_write_all(unsigned long long handle, const char *buffer,
 {
 	unsigned long long total = 0ULL;
 	while (total < length) {
-		long long result = nimera_write_file(handle, buffer + total, length - total);
+		long long result = nimera_write(handle, buffer + total, length - total);
 		if (result <= 0LL) return total != 0ULL ? (long long)total : result;
 		total += (unsigned long long)result;
 	}

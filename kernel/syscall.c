@@ -4,6 +4,7 @@
 #include <nimera/process.h>
 #include <nimera/irq.h>
 #include <nimera/mmu.h>
+#include <nimera/pipe.h>
 #include <nimera/scheduler.h>
 #include <nimera/syscall.h>
 #include <nimera/terminal.h>
@@ -67,41 +68,71 @@ static long long syscall_open(struct irq_frame *frame)
 	return elf_user_open(path, frame->x[2]);
 }
 
-static long long syscall_read(struct irq_frame *frame)
+static struct irq_frame *syscall_read(struct irq_frame *frame)
 {
 	char buffer[USER_IO_CHUNK];
 	u64 destination = frame->x[1], length = frame->x[2], total = 0ULL;
-	if (mmu_user_writable_range(destination, length) == 0) return NIMERA_NERR_INVALID;
+	if (mmu_user_writable_range(destination, length) == 0) {
+		frame->x[0] = (u64)NIMERA_NERR_INVALID; return frame;
+	}
 	while (total < length) {
 		u64 count = length - total;
 		long long result;
 		if (count > USER_IO_CHUNK) count = USER_IO_CHUNK;
 		result = elf_user_read((unsigned int)frame->x[0], buffer, count);
-		if (result < 0LL) return total != 0ULL ? (long long)total : result;
+		if (result == NIMERA_NERR_WOULD_BLOCK && total == 0ULL &&
+			elf_user_handle_type((unsigned int)frame->x[0]) == PROCESS_HANDLE_PIPE_READ) {
+			pipe_wait_reader(elf_user_handle_pipe((unsigned int)frame->x[0]),
+				scheduler_current_thread_id());
+			frame->elr -= 4ULL;
+			return scheduler_block_current_thread(frame);
+		}
+		if (result < 0LL) {
+			frame->x[0] = (u64)(total != 0ULL ? (long long)total : result);
+			return frame;
+		}
 		if (result == 0LL) break;
-		if (copy_to_user(destination + total, buffer, (u64)result) != 0) return NIMERA_NERR_INVALID;
+		if (copy_to_user(destination + total, buffer, (u64)result) != 0) {
+			frame->x[0] = (u64)NIMERA_NERR_INVALID; return frame;
+		}
 		total += (u64)result;
 		if ((u64)result < count) break;
 	}
-	return (long long)total;
+	frame->x[0] = total;
+	return frame;
 }
 
-static long long syscall_write_file(struct irq_frame *frame)
+static struct irq_frame *syscall_write_file(struct irq_frame *frame)
 {
 	char buffer[USER_IO_CHUNK];
 	u64 source = frame->x[1], length = frame->x[2], total = 0ULL;
-	if (mmu_user_readable_range(source, length) == 0) return NIMERA_NERR_INVALID;
+	if (mmu_user_readable_range(source, length) == 0) {
+		frame->x[0] = (u64)NIMERA_NERR_INVALID; return frame;
+	}
 	while (total < length) {
 		u64 count = length - total;
 		long long result;
 		if (count > USER_IO_CHUNK) count = USER_IO_CHUNK;
-		if (copy_from_user(buffer, source + total, count) != 0) return NIMERA_NERR_INVALID;
+		if (copy_from_user(buffer, source + total, count) != 0) {
+			frame->x[0] = (u64)NIMERA_NERR_INVALID; return frame;
+		}
 		result = elf_user_write((unsigned int)frame->x[0], buffer, count);
-		if (result < 0LL) return total != 0ULL ? (long long)total : result;
+		if (result == NIMERA_NERR_WOULD_BLOCK && total == 0ULL &&
+			elf_user_handle_type((unsigned int)frame->x[0]) == PROCESS_HANDLE_PIPE_WRITE) {
+			pipe_wait_writer(elf_user_handle_pipe((unsigned int)frame->x[0]),
+				scheduler_current_thread_id());
+			frame->elr -= 4ULL;
+			return scheduler_block_current_thread(frame);
+		}
+		if (result < 0LL) {
+			frame->x[0] = (u64)(total != 0ULL ? (long long)total : result);
+			return frame;
+		}
 		total += (u64)result;
 		if ((u64)result < count) break;
 	}
-	return (long long)total;
+	frame->x[0] = total;
+	return frame;
 }
 
 static long long syscall_terminal_read_key(struct irq_frame *frame)
@@ -161,9 +192,9 @@ struct irq_frame *syscall_handle(struct irq_frame *frame)
 	case NIMERA_SYS_OPEN:
 		frame->x[0] = (u64)syscall_open(frame); return frame;
 	case NIMERA_SYS_READ:
-		frame->x[0] = (u64)syscall_read(frame); return frame;
+		return syscall_read(frame);
 	case NIMERA_SYS_WRITE:
-		frame->x[0] = (u64)syscall_write_file(frame); return frame;
+		return syscall_write_file(frame);
 	case NIMERA_SYS_CLOSE:
 		frame->x[0] = (u64)elf_user_close((unsigned int)frame->x[0]); return frame;
 	case NIMERA_SYS_TERM_READ_KEY:

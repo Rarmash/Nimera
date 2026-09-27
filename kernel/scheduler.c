@@ -282,6 +282,29 @@ void scheduler_block_current(void)
 	threads[current_thread].state = THREAD_WAITING;
 }
 
+struct irq_frame *scheduler_block_current_thread(struct irq_frame *frame)
+{
+	if (current_thread >= MAX_THREADS || frame == (struct irq_frame *)0)
+		panic("invalid blocking thread");
+	threads[current_thread].frame = frame;
+	threads[current_thread].state = THREAD_WAITING;
+	return scheduler_schedule(frame);
+}
+
+void scheduler_wake_thread(unsigned int index)
+{
+	if (index >= MAX_THREADS) return;
+	if (threads[index].state == THREAD_WAITING) {
+		threads[index].state = THREAD_READY;
+		arch_signal_event();
+	}
+}
+
+unsigned int scheduler_current_thread_id(void)
+{
+	return current_thread;
+}
+
 void scheduler_block_input_current(void)
 {
 	/* Caller holds the IRQ-disabled section from uart_getc(). */

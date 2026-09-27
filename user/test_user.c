@@ -3,6 +3,7 @@
 #define USER_DATA __attribute__((section(".user.data")))
 #define USER_BSS __attribute__((section(".user.bss"), aligned(4096)))
 
+#include <nimera/user.h>
 extern long long nimera_write(const char *text, unsigned long long length);
 extern void nimera_exit(long long status);
 

@@ -265,8 +265,7 @@ kernel symbols or libc. Bad user pointers return an error instead of panicking.
 The loader now constructs an argv array and strings on the user stack. `run`
 splits at spaces/tabs, supports at most eight arguments and 256 argument bytes,
 and passes `argc`, `argv`, and a terminating null pointer in the usual AArch64
-registers. Quoting, environment variables, pipes, and redirection are not
-implemented.
+registers. Quoting, environment variables, and redirection are not implemented.
 
 The same saved exception frame is used for EL1 kernel threads and EL0 tasks.
 It contains the general registers, `ELR_EL1`, `SPSR_EL1`, `SP_EL0`, `ESR_EL1`,
@@ -432,9 +431,34 @@ process and use the kernel address space. TTBR1, ASIDs, SMP, `fork`, `exec`,
 
 Range I/O is the small common VFS extension used by these syscalls. RAMFS and
 NimFS support reads and writes at a file offset, including partial sectors and
-file extension without sparse holes. It is not a cache or a general file API;
-there are still no directory, `chdir`, delete, rename, standard-stream, or
-process syscalls.
+file extension without sparse holes. It is not a cache or a general file API.
+
+## Standard streams and pipes
+
+Every EL0 process has the fixed standard handles 0 (`stdin`), 1 (`stdout`),
+and 2 (`stderr`). Standard output and error initially target the console;
+standard input is initially unavailable. Ordinary dynamically opened handles
+start at 3. Handles are typed by the kernel, so a VFS file, console output,
+pipe reader, and pipe writer cannot be confused by an application.
+
+The pipe implementation is a bounded in-kernel byte ring (4000 bytes). A
+reader waiting for data and a writer waiting for space block through the
+scheduler instead of spinning. Closing the last writer produces EOF; writing
+without readers reports a broken pipe. Endpoint references are released at
+process exit as well as explicit close, so a reader can observe EOF before the
+shell reaps a zombie.
+
+The shell supports one simple pipeline operator, for example:
+
+```text
+cat /system/version | upper
+```
+
+`/apps/cat` reads either a path or standard input, and `/apps/upper` converts
+ASCII lowercase input to uppercase. `make run-pipes` runs an isolated
+concurrent-process test and prints the transformed stream. This is a small
+Nimera stream API, not a claim of POSIX compatibility; there is no general
+redirection, pipeline graph, buffering framework, or shell scripting.
 
 `edit <path>` launches the standalone EL0 NimEdit 0.2 from `/apps/edit`. It
 loads or creates a VFS file, uses a growable flat ASCII byte buffer in
@@ -1244,6 +1268,8 @@ This is a freestanding program rather than a hosted application:
 - `-DNIMERA_PROCESS_TEST=0` keeps the multi-process harness out of the normal
   image; `make run-processes` enables it in the isolated `build-processes/`
   build and formats its explicit development image.
+- `-DNIMERA_PIPE_TEST=0` keeps the concurrent pipe harness out of the normal
+  image; `make run-pipes` enables it in the isolated `build-pipes/` build.
 - `-DNIMERA_COMMAND_TEST=0` keeps external-command resolution out of the
   normal shell boot; `make run-commands` enables it in `build-commands/`.
 - `-DNIMERA_VFS_TEST=0` keeps the normal shell path out of the VFS test;

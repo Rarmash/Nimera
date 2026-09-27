@@ -3,6 +3,7 @@
 
 #include <nimera/types.h>
 #include <nimera/abi/syscall.h>
+#include <nimera/process.h>
 
 struct vfs_node;
 
@@ -27,6 +28,10 @@ enum elf_result {
 enum elf_result elf_load_user(struct vfs_node *cwd, const char *path,
 			      const struct elf_argument *arguments,
 			      unsigned int argument_count);
+enum elf_result elf_load_user_with_stdio(struct vfs_node *cwd, const char *path,
+			      const struct elf_argument *arguments,
+			      unsigned int argument_count,
+			      const struct process_stdio *stdio);
 void elf_user_task_finished(void);
 int elf_user_task_active(void);
 int elf_install_test_payload(struct vfs_node *root);
@@ -38,6 +43,8 @@ long long elf_user_open_directory(const char *path);
 long long elf_user_read(unsigned int handle, char *buffer, u64 length);
 long long elf_user_read_directory(unsigned int handle, struct nimera_dir_entry *entry);
 long long elf_user_write(unsigned int handle, const char *buffer, u64 length);
+enum process_handle_type elf_user_handle_type(unsigned int handle);
+struct pipe *elf_user_handle_pipe(unsigned int handle);
 long long elf_user_close(unsigned int handle);
 long long elf_user_mkdir(const char *path);
 long long elf_user_unlink(const char *path);

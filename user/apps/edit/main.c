@@ -9,7 +9,7 @@ static unsigned long long text_length(const char *text)
 
 static void write_text(const char *text)
 {
-	(void)nimera_write(text, text_length(text));
+	(void)nimera_write_console(text, text_length(text));
 }
 
 static void write_number(unsigned long long value)
@@ -21,7 +21,7 @@ static void write_number(unsigned long long value)
 		digits[count++] = (char)('0' + value % 10ULL);
 		value /= 10ULL;
 	}
-	while (count != 0U) (void)nimera_write(&digits[--count], 1ULL);
+	while (count != 0U) (void)nimera_write_console(&digits[--count], 1ULL);
 }
 
 #if NIMERA_USER_EDITOR_SELF_TEST
@@ -124,7 +124,7 @@ static void render_line(const struct user_editor *editor, unsigned long long lin
 {
 	unsigned long long start = user_editor_line_start_number(editor, line);
 	unsigned long long length = visible_length(editor, line, columns);
-	if (length != 0ULL) (void)nimera_write(editor->data + start, length);
+	if (length != 0ULL) (void)nimera_write_console(editor->data + start, length);
 }
 
 static void render(const struct user_editor *editor, const char *path,

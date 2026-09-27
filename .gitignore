@@ -55,5 +55,6 @@ build-user-app-test/
 build-user-editor-shell/
 build-user-utils/
 build-processes/
+build-pipes/
 build-utils/
 build-utils-format/

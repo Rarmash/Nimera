@@ -5,6 +5,7 @@
 #include <nimera/types.h>
 
 struct vfs_node;
+struct pipe;
 
 #define NIMERA_MAX_PROCESSES 16U
 #define PROCESS_MAX_PAGES 256U
@@ -19,6 +20,15 @@ enum process_state {
 	PROCESS_ZOMBIE
 };
 
+enum process_handle_type {
+	PROCESS_HANDLE_NONE,
+	PROCESS_HANDLE_VFS_FILE,
+	PROCESS_HANDLE_VFS_DIRECTORY,
+	PROCESS_HANDLE_CONSOLE_OUTPUT,
+	PROCESS_HANDLE_PIPE_READ,
+	PROCESS_HANDLE_PIPE_WRITE
+};
+
 struct process_page {
 	u64 virtual_address;
 	u64 physical_address;
@@ -27,10 +37,17 @@ struct process_page {
 
 struct process_handle {
 	unsigned int in_use;
-	unsigned int type;
+	enum process_handle_type type;
 	struct vfs_node *node;
+	struct pipe *pipe;
 	u64 offset;
 	u64 flags;
+};
+
+struct process_stdio {
+	struct pipe *stdin_pipe;
+	struct pipe *stdout_pipe;
+	struct pipe *stderr_pipe;
 };
 
 struct process_allocation {

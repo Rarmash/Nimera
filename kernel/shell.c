@@ -3,11 +3,13 @@
 #include <nimera/editor.h>
 #include <nimera/elf.h>
 #include <nimera/format.h>
+#include <nimera/heap.h>
 #include <nimera/irq.h>
 #include <nimera/memory.h>
 #include <nimera/mmu.h>
 #include <nimera/nimfs.h>
 #include <nimera/pmm.h>
+#include <nimera/pipe.h>
 #include <nimera/process.h>
 #include <nimera/scheduler.h>
 #include <nimera/shell.h>
@@ -224,6 +226,27 @@ static unsigned int shell_contains_slash(const char *text)
 	return 0U;
 }
 
+static void shell_trim(char **text, unsigned int *length)
+{
+	while (*length != 0U && ((*text)[*length - 1U] == ' ' ||
+		(*text)[*length - 1U] == '\t')) (*text)[--*length] = '\0';
+	while (**text == ' ' || **text == '\t') { ++*text; --*length; }
+}
+
+static int shell_stage(char *stage, unsigned int length, char **token,
+	char **rest)
+{
+	unsigned int index = 0U;
+	shell_trim(&stage, &length);
+	if (length == 0U) return -1;
+	while (index < length && stage[index] != ' ' && stage[index] != '\t') ++index;
+	if (index == length) { *token = stage; *rest = stage + length; return 0; }
+	stage[index++] = '\0';
+	while (index < length && (stage[index] == ' ' || stage[index] == '\t')) ++index;
+	*token = stage; *rest = stage + index;
+	return 0;
+}
+
 static unsigned int shell_is_builtin(const char *command)
 {
 	static const char *builtins[] = { "help", "echo", "uptime", "ticks", "irqs",
@@ -253,7 +276,8 @@ static int shell_make_application_path(const char *token, char *path)
 	return 0;
 }
 
-static void shell_launch(const char *token, const char *rest)
+static struct process *shell_spawn_process(const char *token, const char *rest,
+	const struct process_stdio *stdio)
 {
 	enum elf_result result;
 	struct elf_argument arguments[ELF_MAX_ARGUMENTS];
@@ -261,49 +285,112 @@ static void shell_launch(const char *token, const char *rest)
 	struct vfs_node *node;
 	unsigned int count = 1U;
 	unsigned int total;
-	u64 worker_before = scheduler_worker_counter();
 	const char *cursor = rest == (const char *)0 ? "" : rest;
 	arguments[0].text = token;
 	arguments[0].length = (u64)shell_string_length(token);
 	total = (unsigned int)arguments[0].length;
 	if (token == (const char *)0 || token[0] == '\0' || shell_make_application_path(token, executable) != 0) {
-		console_write("Cannot execute: invalid path\r\n"); return;
+		console_write("Cannot execute: invalid path\r\n"); return (struct process *)0;
 	}
 	while (*cursor != '\0') {
 		const char *start;
 		while (*cursor == ' ' || *cursor == '\t') ++cursor;
 		if (*cursor == '\0') break;
-		if (count == ELF_MAX_ARGUMENTS) { console_write("Cannot execute: arguments too large\r\n"); return; }
+		if (count == ELF_MAX_ARGUMENTS) { console_write("Cannot execute: arguments too large\r\n"); return (struct process *)0; }
 		start = cursor;
 		while (*cursor != '\0' && *cursor != ' ' && *cursor != '\t') ++cursor;
 		arguments[count].text = start;
 		arguments[count].length = (u64)(cursor - start);
-		if (arguments[count].length > ELF_MAX_ARGUMENT_BYTES - total) { console_write("Cannot execute: arguments too large\r\n"); return; }
+		if (arguments[count].length > ELF_MAX_ARGUMENT_BYTES - total) { console_write("Cannot execute: arguments too large\r\n"); return (struct process *)0; }
 		total += (unsigned int)arguments[count].length;
 		++count;
 		if (*cursor != '\0') { *(char *)(unsigned long)cursor = '\0'; ++cursor; }
 	}
 	if (vfs_resolve(shell_cwd, executable, &node) != VFS_OK) {
-		console_write("Unknown command: "); console_write(token); console_write("\r\n"); return;
+		console_write("Unknown command: "); console_write(token); console_write("\r\n"); return (struct process *)0;
 	}
 	if (vfs_node_type(node) == VFS_NODE_DIRECTORY) {
-		vfs_node_release(node); console_write("Cannot execute directory: "); console_write(executable); console_write("\r\n"); return;
+		vfs_node_release(node); console_write("Cannot execute directory: "); console_write(executable); console_write("\r\n"); return (struct process *)0;
 	}
 	vfs_node_release(node);
-	result = elf_load_user(shell_cwd, executable, arguments, count);
+	result = elf_load_user_with_stdio(shell_cwd, executable, arguments, count, stdio);
 	if (result != ELF_OK) {
 		console_write("Cannot execute "); console_write(executable); console_write(": ");
-		console_write(elf_error_string(result)); console_write("\r\n"); return;
+		console_write(elf_error_string(result)); console_write("\r\n"); return (struct process *)0;
 	}
-	if (process_last_spawned() != (struct process *)0)
-		process_last_spawned()->terminal_owner = 1U;
+	return process_last_spawned();
+}
+
+static void shell_wait_for_process(struct process *process)
+{
+	while (process != (struct process *)0 && process_is_zombie(process) == 0) {
+		scheduler_block_current();
+		arch_wait_for_event();
+	}
+}
+
+static void shell_launch(const char *token, const char *rest)
+{
+	u64 worker_before = scheduler_worker_counter();
+	struct process *process = shell_spawn_process(token, rest,
+		(const struct process_stdio *)0);
+	if (process == (struct process *)0) return;
+	process->terminal_owner = 1U;
 	console_write("Entering EL0...\r\n");
-	scheduler_block_current();
-	while (elf_user_task_active() != 0) arch_wait_for_event();
+	shell_wait_for_process(process);
+	process_reap(process);
 	if (text_equals(token, "keytest") != 0U) {
 		console_write("EL0 terminal blocking: OK\r\nWorker progressed while app waited: ");
 		console_write(scheduler_worker_counter() > worker_before ? "yes\r\n" : "no\r\n");
 	}
+}
+
+static void shell_pipeline(char *line, unsigned int length)
+{
+	char *separator = (char *)0;
+	char *left_token;
+	char *left_rest;
+	char *right_token;
+	char *right_rest;
+	struct pipe *pipe;
+	struct process_stdio left_stdio = {0};
+	struct process_stdio right_stdio = {0};
+	struct process *producer;
+	struct process *consumer;
+	unsigned int separators = 0U;
+	for (unsigned int index = 0U; index < length; ++index)
+		if (line[index] == '|') { separator = &line[index]; ++separators; }
+	if (separators > 1U) {
+		console_write("only one pipeline stage is supported\r\n"); return;
+	}
+	if (separator == (char *)0) return;
+	*separator = '\0';
+	if (shell_stage(line, (unsigned int)(separator - line), &left_token, &left_rest) != 0 ||
+		shell_stage(separator + 1U, length - (unsigned int)(separator - line) - 1U,
+		&right_token, &right_rest) != 0) {
+		console_write("invalid pipeline\r\n"); return;
+	}
+	if (shell_is_builtin(left_token) != 0U || shell_is_builtin(right_token) != 0U) {
+		console_write("pipeline stages must be applications\r\n"); return;
+	}
+	pipe = pipe_create();
+	if (pipe == (struct pipe *)0) { console_write("pipe: out of memory\r\n"); return; }
+	left_stdio.stdout_pipe = pipe;
+	producer = shell_spawn_process(left_token, left_rest, &left_stdio);
+	if (producer == (struct process *)0) { pipe_discard(pipe); return; }
+	right_stdio.stdin_pipe = pipe;
+	consumer = shell_spawn_process(right_token, right_rest, &right_stdio);
+	if (consumer == (struct process *)0) {
+		pipe_reader_close(pipe);
+		shell_wait_for_process(producer);
+		process_reap(producer);
+		return;
+	}
+	consumer->terminal_owner = 1U;
+	shell_wait_for_process(producer);
+	shell_wait_for_process(consumer);
+	process_reap(producer);
+	process_reap(consumer);
 }
 
 static void shell_run_program(const char *argument)
@@ -504,6 +591,8 @@ static void shell_execute(char *line, unsigned int length)
 					line[length - 1U] == '\t')) {
 		line[--length] = '\0';
 	}
+	for (index = 0U; index < length; ++index)
+		if (line[index] == '|') { shell_pipeline(line, length); return; }
 	echo_command = starts_echo(line, length);
 	for (index = 0U; index < length; ++index) {
 		if (line[index] == ' ' || line[index] == '\t') {

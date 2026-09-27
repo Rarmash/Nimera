@@ -4,7 +4,9 @@
 #include <nimera/abi/syscall.h>
 #include <nimera/abi/terminal.h>
 
-long long nimera_write(const char *text, unsigned long long length);
+long long nimera_write(unsigned long long handle, const void *buffer,
+	unsigned long long length);
+long long nimera_write_console(const char *text, unsigned long long length);
 long long nimera_exit(long long status);
 long long nimera_open(const char *path, unsigned long long length,
 	unsigned long long flags);

@@ -9,16 +9,16 @@ static unsigned long long text_length(const char *text)
 
 static void write_text(const char *text)
 {
-	(void)nimera_write(text, text_length(text));
+	(void)nimera_write_console(text, text_length(text));
 }
 
 static void write_number(unsigned int value)
 {
 	char digits[10];
 	unsigned int count = 0U;
-	if (value == 0U) { (void)nimera_write("0", 1ULL); return; }
+	if (value == 0U) { (void)nimera_write_console("0", 1ULL); return; }
 	while (value != 0U) { digits[count++] = (char)('0' + value % 10U); value /= 10U; }
-	while (count != 0U) (void)nimera_write(&digits[--count], 1ULL);
+	while (count != 0U) (void)nimera_write_console(&digits[--count], 1ULL);
 }
 
 static const char *key_name(const struct nimera_key_event *event)

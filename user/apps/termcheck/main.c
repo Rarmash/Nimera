@@ -9,7 +9,7 @@ static unsigned long long length(const char *text)
 
 static void say(const char *text)
 {
-	(void)nimera_write(text, length(text));
+	(void)nimera_write_console(text, length(text));
 }
 
 int main(void)

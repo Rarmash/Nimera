@@ -12,6 +12,7 @@
 #include <nimera/mmu.h>
 #include <nimera/nimfs.h>
 #include <nimera/panic.h>
+#include <nimera/pipe.h>
 #include <nimera/pmm.h>
 #include <nimera/process.h>
 #include <nimera/shell.h>
@@ -915,6 +916,218 @@ static void process_test_run(void)
 }
 #endif
 
+#if NIMERA_PIPE_TEST
+static struct process *pipe_spawn(const char *path,
+	const struct elf_argument *arguments, unsigned int argument_count,
+	const struct process_stdio *stdio)
+{
+	if (elf_load_user_with_stdio(vfs_root(), path, arguments, argument_count,
+		stdio) != ELF_OK) panic("pipe test process spawn failed");
+	return process_last_spawned();
+}
+
+static void pipe_wait_for_pair(struct process *first, struct process *second)
+{
+	while (!process_is_zombie(first) || !process_is_zombie(second)) {
+		scheduler_block_current();
+		arch_wait_for_event();
+	}
+}
+
+static int pipe_waiting(const struct process *process)
+{
+	const struct thread *thread = scheduler_thread(process->thread_index);
+	return thread != (const struct thread *)0 && thread->state == THREAD_WAITING;
+}
+
+static void pipe_reap_pair(struct process *first, struct process *second)
+{
+	process_reap(first);
+	process_reap(second);
+}
+
+static void pipe_test_run(void)
+{
+	static const struct elf_argument cat_arguments[] = {
+		{"/apps/cat", 9ULL}, {"/system/version", 15ULL}};
+	static const struct elf_argument upper_arguments[] = {{"/apps/upper", 11ULL}};
+	struct process_stdio producer_stdio = {0};
+	struct process_stdio consumer_stdio = {0};
+	struct process *producer;
+	struct process *consumer;
+	int reader_wakeup_ok = 0;
+	int writer_wakeup_ok = 0;
+	struct pipe *pipe = pipe_create();
+	if (pipe == (struct pipe *)0) panic("pipe test allocation failed");
+	producer_stdio.stdout_pipe = pipe;
+	producer = pipe_spawn("/apps/cat", cat_arguments, 2U, &producer_stdio);
+	consumer_stdio.stdin_pipe = pipe;
+	consumer = pipe_spawn("/apps/upper", upper_arguments, 1U, &consumer_stdio);
+	consumer->terminal_owner = 1U;
+	console_write("Nimera pipe test\r\nstandard handles: ");
+	console_write(producer->handles[NIMERA_STDOUT].type == PROCESS_HANDLE_PIPE_WRITE &&
+		consumer->handles[NIMERA_STDIN].type == PROCESS_HANDLE_PIPE_READ ?
+		"OK\r\n" : "FAILED\r\n");
+	console_write("distinct producer/consumer PIDs: ");
+	console_write(producer->pid != consumer->pid ? "OK\r\n" : "FAILED\r\n");
+	console_write("different TTBR0 roots: ");
+	console_write(producer->address_space.root_table != consumer->address_space.root_table ?
+		"OK\r\n" : "FAILED\r\n");
+	console_write("stream output follows:\r\n");
+	pipe_wait_for_pair(producer, consumer);
+	console_write("basic transfer: ");
+	console_write(producer->exit_status == 0LL && consumer->exit_status == 0LL ?
+		"OK\r\n" : "FAILED\r\n");
+	pipe_reap_pair(producer, consumer);
+
+	/* Reader first: the temporary writer keeps the pipe open while the
+	 * checker reaches WAITING. The faulting producer then supplies bytes and
+	 * closes the last writer, proving wakeup, cleanup, and EOF. */
+	{
+		static const struct elf_argument checker_args[] =
+			{{"/apps/pipetest", 14ULL}, {"checker", 7ULL}, {"64", 2ULL}};
+		static const struct elf_argument fault_args[] =
+			{{"/apps/pipetest", 14ULL}, {"fault-producer", 14ULL}};
+		struct process_stdio reader_stdio = {0};
+		struct process_stdio fault_stdio = {0};
+		struct process *reader;
+		struct process *fault;
+		u64 worker_before = scheduler_worker_counter();
+		pipe = pipe_create();
+		if (pipe == (struct pipe *)0) panic("reader test pipe allocation failed");
+		pipe_writer_open(pipe);
+		reader_stdio.stdin_pipe = pipe;
+		reader = pipe_spawn("/apps/pipetest", checker_args, 3U, &reader_stdio);
+		while (!pipe_waiting(reader)) arch_wait_for_event();
+		fault_stdio.stdout_pipe = pipe;
+		fault = pipe_spawn("/apps/pipetest", fault_args, 2U, &fault_stdio);
+		pipe_writer_close(pipe);
+		pipe_wait_for_pair(reader, fault);
+		reader_wakeup_ok = pipe_waiting(reader) == 0 && reader->exit_status == 0LL &&
+			scheduler_worker_counter() > worker_before;
+		console_write("reader blocking/wakeup: ");
+		console_write(reader_wakeup_ok != 0 ? "OK\r\n" : "FAILED\r\n");
+		console_write("EOF: ");
+		console_write(reader->exit_status == 0LL && fault->exit_status != 0LL ?
+			"OK\r\n" : "FAILED\r\n");
+		console_write("producer fault cleanup: ");
+		console_write(fault->exit_status != 0LL ? "OK\r\n" : "FAILED\r\n");
+		pipe_reap_pair(reader, fault);
+	}
+
+	/* Producer first: a temporary reader makes writes legal. The producer
+	 * must fill the ring and sleep before the checker is created. */
+	{
+		static const struct elf_argument producer_args[] =
+			{{"/apps/pipetest", 14ULL}, {"producer", 8ULL}};
+		static const struct elf_argument checker_args[] =
+			{{"/apps/pipetest", 14ULL}, {"checker", 7ULL}, {"16384", 5ULL}};
+		struct process_stdio producer_stdio2 = {0};
+		struct process_stdio checker_stdio = {0};
+		struct process *producer2;
+		struct process *checker;
+		int blocked;
+		u64 worker_before = scheduler_worker_counter();
+		pipe = pipe_create();
+		if (pipe == (struct pipe *)0) panic("writer test pipe allocation failed");
+		pipe_reader_open(pipe);
+		producer_stdio2.stdout_pipe = pipe;
+		producer2 = pipe_spawn("/apps/pipetest", producer_args, 2U, &producer_stdio2);
+		while (!pipe_waiting(producer2)) arch_wait_for_event();
+		blocked = pipe_waiting(producer2);
+		checker_stdio.stdin_pipe = pipe;
+		checker = pipe_spawn("/apps/pipetest", checker_args, 3U, &checker_stdio);
+		pipe_reader_close(pipe);
+		pipe_wait_for_pair(producer2, checker);
+		writer_wakeup_ok = blocked && producer2->exit_status == 0LL &&
+			checker->exit_status == 0LL && scheduler_worker_counter() > worker_before;
+		console_write("writer blocking/wakeup: ");
+		console_write(writer_wakeup_ok != 0 ? "OK\r\n" : "FAILED\r\n");
+		console_write("large streaming transfer: ");
+		console_write(checker->exit_status == 0LL ? "OK\r\n" : "FAILED\r\n");
+		console_write("lost-wakeup regression: ");
+		console_write(reader_wakeup_ok != 0 && writer_wakeup_ok != 0 ?
+			"OK\r\n" : "FAILED\r\n");
+		pipe_reap_pair(producer2, checker);
+	}
+
+	/* The faulting consumer closes the last reader while the producer is
+	 * writing. The producer must wake and observe NERR_BROKEN_PIPE. */
+	{
+		static const struct elf_argument producer_args[] =
+			{{"/apps/pipetest", 14ULL}, {"broken-producer", 16ULL}};
+		static const struct elf_argument consumer_args[] =
+			{{"/apps/pipetest", 14ULL}, {"fault-consumer", 14ULL}};
+		struct process_stdio producer_stdio2 = {0};
+		struct process_stdio consumer_stdio2 = {0};
+		struct process *producer2;
+		struct process *consumer2;
+		pipe = pipe_create();
+		if (pipe == (struct pipe *)0) panic("broken pipe allocation failed");
+		pipe_reader_open(pipe);
+		producer_stdio2.stdout_pipe = pipe;
+		producer2 = pipe_spawn("/apps/pipetest", producer_args, 2U, &producer_stdio2);
+		consumer_stdio2.stdin_pipe = pipe;
+		consumer2 = pipe_spawn("/apps/pipetest", consumer_args, 2U, &consumer_stdio2);
+		pipe_reader_close(pipe);
+		pipe_wait_for_pair(producer2, consumer2);
+		console_write("broken pipe: ");
+		console_write(producer2->exit_status == 0LL && consumer2->exit_status != 0LL ?
+			"OK\r\n" : "FAILED\r\n");
+		console_write("consumer fault cleanup: ");
+		console_write(consumer2->exit_status != 0LL ? "OK\r\n" : "FAILED\r\n");
+		pipe_reap_pair(producer2, consumer2);
+	}
+
+	/* Re-run short producer/checker pipelines and compare the resource
+	 * counters after every reap. This catches leaked process mappings,
+	 * handles, pipe buffers, or heap metadata without adding a framework. */
+	{
+		static const struct elf_argument producer_args[] =
+			{{"/apps/pipetest", 14ULL}, {"producer", 8ULL}};
+		static const struct elf_argument checker_args[] =
+			{{"/apps/pipetest", 14ULL}, {"checker", 7ULL}, {"16384", 5ULL}};
+		unsigned int process_before = process_count();
+		unsigned int pipes_before = pipe_live_count();
+		u64 pipe_bytes_before = pipe_live_bytes();
+		for (unsigned int repeat = 0U; repeat < 8U; ++repeat) {
+			struct process_stdio producer_stdio2 = {0};
+			struct process_stdio checker_stdio = {0};
+			struct process *producer2;
+			struct process *checker;
+			pipe = pipe_create();
+			if (pipe == (struct pipe *)0) panic("repeated pipe allocation failed");
+			pipe_reader_open(pipe);
+			producer_stdio2.stdout_pipe = pipe;
+			producer2 = pipe_spawn("/apps/pipetest", producer_args, 2U, &producer_stdio2);
+			checker_stdio.stdin_pipe = pipe;
+			checker = pipe_spawn("/apps/pipetest", checker_args, 3U, &checker_stdio);
+			pipe_reader_close(pipe);
+			pipe_wait_for_pair(producer2, checker);
+			if (producer2->exit_status != 0LL || checker->exit_status != 0LL)
+				panic("repeated pipe transfer failed");
+			pipe_reap_pair(producer2, checker);
+		}
+		console_write("repeated cleanup: ");
+		console_write(process_count() == process_before &&
+			pipe_live_count() == pipes_before && pipe_live_bytes() == pipe_bytes_before ?
+			"OK\r\n" : "FAILED\r\n");
+		if (process_count() != process_before || pipe_live_count() != pipes_before ||
+			pipe_live_bytes() != pipe_bytes_before) {
+			console_write("cleanup counters: process ");
+			format_u64_decimal(process_count()); console_write("/");
+			format_u64_decimal(process_before); console_write(" pipes ");
+			format_u64_decimal(pipe_live_count()); console_write("/");
+			format_u64_decimal(pipes_before); console_write("\r\n");
+		}
+		console_write("pipe resources: ");
+		console_write(pipe_live_count() == pipes_before &&
+			pipe_live_bytes() == pipe_bytes_before ? "OK\r\n" : "FAILED\r\n");
+	}
+	console_write("Process pipe test complete.\r\n");
+}
+#endif
+
 void kernel_main(void)
 {
 	timer_init();
@@ -973,7 +1186,7 @@ void kernel_main(void)
 		}
 		format_u64_decimal(device->block_count * device->block_size);
 		console_write(" bytes\r\nSuperblock: initialized\r\nAllocation bitmap: initialized\r\nInode table: initialized\r\nRoot inode: created\r\nInitial tree: created\r\nNimFS format complete.\r\n");
-		#if !NIMERA_PROCESS_TEST
+		#if !NIMERA_PROCESS_TEST && !NIMERA_PIPE_TEST
 		return;
 		#endif
 	}
@@ -1041,6 +1254,11 @@ irq_enable();
 
 #if NIMERA_PROCESS_TEST
 	process_test_run();
+	return;
+#endif
+
+#if NIMERA_PIPE_TEST
+	pipe_test_run();
 	return;
 #endif
 

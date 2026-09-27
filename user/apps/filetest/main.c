@@ -25,15 +25,15 @@ int main(int argc, char **argv)
 		length(first)) != (long long)length(first) ||
 		nimera_write_file((unsigned long long)handle, second, length(second)) !=
 		(long long)length(second) || nimera_close((unsigned long long)handle) != 0) {
-		(void)nimera_write(fail, sizeof(fail) - 1ULL); return 1;
+		(void)nimera_write(NIMERA_STDOUT, fail, sizeof(fail) - 1ULL); return 1;
 	}
 	handle = nimera_open(path, length(path), NIMERA_OPEN_READ);
-	if (handle < 0) { (void)nimera_write(fail, sizeof(fail) - 1ULL); return 1; }
+	if (handle < 0) { (void)nimera_write(NIMERA_STDOUT, fail, sizeof(fail) - 1ULL); return 1; }
 	count = nimera_read((unsigned long long)handle, buffer, sizeof(buffer));
 	if (count != (long long)(sizeof(first) + sizeof(second) - 2ULL) ||
 		nimera_close((unsigned long long)handle) != 0) {
-		(void)nimera_write(fail, sizeof(fail) - 1ULL); return 1;
+		(void)nimera_write(NIMERA_STDOUT, fail, sizeof(fail) - 1ULL); return 1;
 	}
-	(void)nimera_write(ok, sizeof(ok) - 1ULL);
+	(void)nimera_write(NIMERA_STDOUT, ok, sizeof(ok) - 1ULL);
 	return 0;
 }
