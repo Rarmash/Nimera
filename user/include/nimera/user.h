@@ -21,6 +21,8 @@ int nimera_terminal_clear(void);
 int nimera_terminal_move_cursor(unsigned int row, unsigned int column);
 int nimera_terminal_clear_line(void);
 int nimera_terminal_cursor_visible(int visible);
+int nimera_terminal_begin_update(void);
+int nimera_terminal_end_update(void);
 void *nimera_alloc(unsigned long long bytes);
 int nimera_free(void *address);
 long long nimera_open_directory(const char *path, unsigned long long length);

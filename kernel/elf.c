@@ -508,6 +508,7 @@ void elf_user_task_finished(void)
 void process_mark_exit(struct process *process, long long status)
 {
 	if (process == (struct process *)0) return;
+	if (process->terminal_owner != 0U) terminal_cancel_update();
 	process->exit_status = status;
 	/* Endpoint references must disappear at exit so readers can observe EOF
 	 * before the shell eventually reaps the zombie process. */

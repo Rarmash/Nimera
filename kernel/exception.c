@@ -6,6 +6,7 @@
 #include <nimera/process.h>
 #include <nimera/scheduler.h>
 #include <nimera/syscall.h>
+#include <nimera/terminal.h>
 
 static void write_exception_type(u64 type)
 {
@@ -72,6 +73,7 @@ struct irq_frame *exception_sync_handle(struct irq_frame *frame)
 		return syscall_handle(frame);
 	}
 	user_fault_report(frame->esr, frame->elr, frame->far);
+	terminal_cancel_update();
 	process_mark_exit(process_current(), -1LL);
 	{
 		struct irq_frame *next = scheduler_terminate_current(frame);

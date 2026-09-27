@@ -1,4 +1,5 @@
 #include <nimera/display.h>
+#include <nimera/render_stats.h>
 
 static u32 *framebuffer;
 static u64 width;
@@ -33,5 +34,6 @@ int display_flush(u64 x, u64 y, u64 w, u64 h)
 	if (x >= width || y >= height) return -1;
 	if (w > width - x) w = width - x;
 	if (h > height - y) h = height - y;
+	render_stats_display_flush();
 	return flush_callback(x, y, w, h);
 }

@@ -2,6 +2,7 @@
 #include <nimera/graphics.h>
 #include <nimera/timer.h>
 #include <nimera/console.h>
+#include <nimera/render_stats.h>
 
 /* Nimera Mono is an 8x8 bitmap rendered as 8x16 pixels.  The extra pixel of
  * cell advance is intentional: it gives letters breathing room without
@@ -219,6 +220,7 @@ void graphics_draw_codepoint(u64 x, u64 y, u32 codepoint, u32 foreground,
 				u32 background)
 {
 	const unsigned char *glyph = graphics_glyph(codepoint);
+	render_stats_glyph_draw();
 
 	graphics_fill_rect(x, y, graphics_cell_width(), graphics_cell_height(),
 			   background);

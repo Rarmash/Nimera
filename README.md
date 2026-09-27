@@ -573,6 +573,16 @@ The compositor fills a solid background, composites visible surfaces in z-order,
 draws the mouse pointer last, and merges updates into one clipped dirty
 bounding rectangle before flushing it.
 
+Terminal drawing and display presentation are separate steps. A terminal update
+can be bracketed by `terminal_begin_update()` and `terminal_end_update()`; the
+compositor then composes and flushes the accumulated dirty region once instead
+of presenting once per glyph or cell. The standalone NimEdit application uses
+the matching public terminal syscalls for one full redraw transaction. Pointer
+movement and window dragging still present their small old/new dirty regions
+independently. `make run-render-batching` runs an isolated counter-based test
+for this behavior. This is batching only: there is no vsync, animation, or
+double-buffered compositor yet.
+
 This is deliberately not a userspace window system: all surface ownership
 remains in the kernel. The separate `make run-windows` target adds the first
 small kernel-owned window manager described below; it does not add a userspace

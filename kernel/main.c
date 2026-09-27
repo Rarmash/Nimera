@@ -20,6 +20,7 @@
 #include <nimera/shell.h>
 #include <nimera/scheduler.h>
 #include <nimera/terminal.h>
+#include <nimera/render_test.h>
 #include <nimera/timer.h>
 #include <nimera/user.h>
 #include <nimera/vfs.h>
@@ -1524,5 +1525,9 @@ irq_enable();
 #endif
 	console_write("kernel: starting shell\r\n");
 	terminal_init();
+#if NIMERA_RENDER_BATCHING_TEST
+	render_batching_test();
+	return;
+#endif
 	shell_run();
 }

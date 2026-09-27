@@ -137,6 +137,7 @@ static void render(const struct user_editor *editor, const char *path,
 	unsigned long long column = editor->cursor - start;
 	if (line < first_line) first_line = line;
 	if (line >= first_line + viewport) first_line = line - viewport + 1ULL;
+	(void)nimera_terminal_begin_update();
 	(void)nimera_terminal_clear();
 	(void)nimera_terminal_move_cursor(0U, 0U);
 	write_text("NimEdit 0.2 - "); write_text(path);
@@ -159,6 +160,7 @@ static void render(const struct user_editor *editor, const char *path,
 	(void)nimera_terminal_move_cursor((unsigned int)(line - first_line) + 1U,
 		(unsigned int)column);
 	(void)nimera_terminal_cursor_visible(1);
+	(void)nimera_terminal_end_update();
 }
 
 static const char *key_status(const struct nimera_key_event *event)

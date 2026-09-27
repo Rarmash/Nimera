@@ -218,6 +218,21 @@ void terminal_init(void)
 	}
 }
 
+void terminal_begin_update(void)
+{
+	if (terminal_framebuffer_active() != 0) compositor_begin_update();
+}
+
+void terminal_end_update(void)
+{
+	if (terminal_framebuffer_active() != 0) compositor_end_update();
+}
+
+void terminal_cancel_update(void)
+{
+	if (terminal_framebuffer_active() != 0) compositor_cancel_update();
+}
+
 int terminal_framebuffer_active(void)
 {
 	#if NIMERA_FRAMEBUFFER_TERMINAL
@@ -396,14 +411,16 @@ struct key_event terminal_read_key(void)
 
 void terminal_clear(void)
 {
-	if (terminal_framebuffer_active() != 0) terminal_fb_clear();
+	if (terminal_framebuffer_active() != 0) {
+		terminal_begin_update(); terminal_fb_clear(); terminal_end_update();
+	}
 	else debug_console_write("\033[2J\033[H");
 }
 
 void terminal_move_cursor(unsigned int row, unsigned int column)
 {
 	if (terminal_framebuffer_active() != 0) {
-		terminal_fb_move_cursor(row, column);
+		terminal_begin_update(); terminal_fb_move_cursor(row, column); terminal_end_update();
 		return;
 	}
 	debug_console_write("\033[");
@@ -429,19 +446,25 @@ void terminal_move_cursor(unsigned int row, unsigned int column)
 
 void terminal_clear_line(void)
 {
-	if (terminal_framebuffer_active() != 0) terminal_fb_clear_line();
+	if (terminal_framebuffer_active() != 0) {
+		terminal_begin_update(); terminal_fb_clear_line(); terminal_end_update();
+	}
 	else debug_console_write("\033[2K");
 }
 
 void terminal_hide_cursor(void)
 {
-	if (terminal_framebuffer_active() != 0) terminal_fb_hide_cursor();
+	if (terminal_framebuffer_active() != 0) {
+		terminal_begin_update(); terminal_fb_hide_cursor(); terminal_end_update();
+	}
 	else debug_console_write("\033[?25l");
 }
 
 void terminal_show_cursor(void)
 {
-	if (terminal_framebuffer_active() != 0) terminal_fb_show_cursor();
+	if (terminal_framebuffer_active() != 0) {
+		terminal_begin_update(); terminal_fb_show_cursor(); terminal_end_update();
+	}
 	else debug_console_write("\033[?25h");
 }
 

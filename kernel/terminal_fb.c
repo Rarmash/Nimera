@@ -190,11 +190,14 @@ static void terminal_fb_put_codepoint(u32 codepoint)
 
 void terminal_fb_putc(char character)
 {
+	compositor_begin_update();
 	terminal_fb_put_codepoint((u32)(unsigned char)character);
+	compositor_end_update();
 }
 
 void terminal_fb_write(const char *text)
 {
+	compositor_begin_update();
 	while (*text != '\0') {
 		u32 output[2];
 		unsigned int count = utf8_decoder_push(&decoder,
@@ -202,6 +205,7 @@ void terminal_fb_write(const char *text)
 		for (unsigned int index = 0U; index < count; ++index)
 			terminal_fb_put_codepoint(output[index]);
 	}
+	compositor_end_update();
 }
 
 void terminal_fb_clear(void)

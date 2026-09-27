@@ -45,14 +45,16 @@ static int copy_user_path(u64 address, u64 length, char *path)
 
 static long long syscall_write_console(struct irq_frame *frame)
 {
-	char buffer[USER_IO_CHUNK];
+	char buffer[USER_IO_CHUNK + 1U];
 	u64 address = frame->x[0], length = frame->x[1];
 	if (mmu_user_readable_range(address, length) == 0) return NIMERA_NERR_INVALID;
 	for (u64 offset = 0ULL; offset < length;) {
 		u64 count = length - offset;
 		if (count > USER_IO_CHUNK) count = USER_IO_CHUNK;
 		if (copy_from_user(buffer, address + offset, count) != 0) return NIMERA_NERR_INVALID;
-		for (u64 index = 0ULL; index < count; ++index) console_putc(buffer[index]);
+		/* console_write() accepts text, so terminate each copied chunk. */
+		buffer[count] = '\0';
+		console_write(buffer);
 		offset += count;
 	}
 	return (long long)length;
@@ -181,6 +183,7 @@ struct irq_frame *syscall_handle(struct irq_frame *frame)
 	case NIMERA_SYS_WRITE_CONSOLE:
 		frame->x[0] = (u64)syscall_write_console(frame); return frame;
 	case NIMERA_SYS_EXIT:
+		terminal_cancel_update();
 		scheduler_set_user_exit_status((long long)frame->x[0]);
 		process_mark_exit(process_current(), (long long)frame->x[0]);
 		{
@@ -211,6 +214,14 @@ struct irq_frame *syscall_handle(struct irq_frame *frame)
 		if (terminal_allowed() == 0) { frame->x[0] = (u64)NIMERA_NERR_ACCESS; return frame; }
 		if (frame->x[0] > 1ULL) frame->x[0] = (u64)NIMERA_NERR_INVALID;
 		else { if (frame->x[0] != 0ULL) terminal_show_cursor(); else terminal_hide_cursor(); frame->x[0] = 0ULL; }
+		return frame;
+	case NIMERA_SYS_TERM_BEGIN_UPDATE:
+		if (terminal_allowed() == 0) frame->x[0] = (u64)NIMERA_NERR_ACCESS;
+		else { terminal_begin_update(); frame->x[0] = 0ULL; }
+		return frame;
+	case NIMERA_SYS_TERM_END_UPDATE:
+		if (terminal_allowed() == 0) frame->x[0] = (u64)NIMERA_NERR_ACCESS;
+		else { terminal_end_update(); frame->x[0] = 0ULL; }
 		return frame;
 	case NIMERA_SYS_MEM_ALLOC:
 		frame->x[0] = (u64)elf_user_alloc(frame->x[0]); return frame;

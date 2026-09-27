@@ -2,6 +2,7 @@
 #include <nimera/console.h>
 #include <nimera/display.h>
 #include <nimera/graphics.h>
+#include <nimera/render_stats.h>
 #include <nimera/timer.h>
 
 #define COMPOSITOR_BACKGROUND 0x00101828U
@@ -19,6 +20,10 @@ static u64 dirty_x;
 static u64 dirty_y;
 static u64 dirty_width;
 static u64 dirty_height;
+#if NIMERA_RENDER_BATCHING
+static unsigned int update_depth;
+static unsigned int present_pending;
+#endif
 
 static void mark_screen_region(long long x, long long y, u64 width, u64 height)
 {
@@ -183,12 +188,50 @@ void compositor_render_end(void) { graphics_reset_target(); }
 
 void compositor_mark_dirty(long long x, long long y, u64 width, u64 height)
 {
-	if (initialized != 0U) mark_screen_region(x, y, width, height);
+	if (initialized != 0U) {
+		render_stats_dirty_mark();
+		mark_screen_region(x, y, width, height);
+	}
+}
+
+void compositor_begin_update(void)
+{
+#if NIMERA_RENDER_BATCHING
+	if (initialized != 0U) ++update_depth;
+#endif
+}
+
+void compositor_end_update(void)
+{
+#if NIMERA_RENDER_BATCHING
+	if (update_depth == 0U) return;
+	--update_depth;
+	if (update_depth == 0U && present_pending != 0U) {
+		present_pending = 0U;
+		compositor_present();
+	}
+#endif
+}
+
+void compositor_cancel_update(void)
+{
+#if NIMERA_RENDER_BATCHING
+	update_depth = 0U;
+	present_pending = 0U;
+#endif
+	compositor_present();
 }
 
 void compositor_present(void)
 {
 	if (initialized == 0U || dirty == 0U) return;
+#if NIMERA_RENDER_BATCHING
+	if (update_depth != 0U) {
+		present_pending = 1U;
+		return;
+	}
+#endif
+	render_stats_compositor_compose();
 	final_fill(dirty_x, dirty_y, dirty_width, dirty_height, COMPOSITOR_BACKGROUND);
 	for (unsigned int index = 0U; index < surface_count; ++index)
 		copy_surface_region(surfaces[index]);

@@ -13,6 +13,9 @@ struct nimera_surface *compositor_terminal_surface(void);
 void compositor_render_begin(struct nimera_surface *surface);
 void compositor_render_end(void);
 void compositor_mark_dirty(long long x, long long y, u64 width, u64 height);
+void compositor_begin_update(void);
+void compositor_end_update(void);
+void compositor_cancel_update(void);
 void compositor_present(void);
 void compositor_handle_pointer_event(const struct pointer_event *event);
 

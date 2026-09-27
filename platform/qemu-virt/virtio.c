@@ -7,6 +7,7 @@
 #include <nimera/format.h>
 #include <nimera/display.h>
 #include <nimera/input.h>
+#include <nimera/render_stats.h>
 
 typedef unsigned char u8;
 typedef unsigned int u32;
@@ -366,9 +367,11 @@ static int gpu_flush(u64 x, u64 y, u64 width, u64 height)
 	if (gpu_command(GPU_CMD_TRANSFER_TO_HOST_2D, 56U, 24U) != 0) return -1;
 	gpu_put32(request + 24, (u32)x); gpu_put32(request + 28, (u32)y); gpu_put32(request + 32, (u32)width); gpu_put32(request + 36, (u32)height);
 	gpu_put64(request + 40, y * gpu.pitch + x * 4ULL); gpu_put32(request + 48, 1U);
+	render_stats_gpu_transfer();
 	if (gpu_submit(56U, 24U) != 0) return -1;
 	if (gpu_command(GPU_CMD_RESOURCE_FLUSH, 48U, 24U) != 0) return -1;
 	gpu_put32(request + 24, (u32)x); gpu_put32(request + 28, (u32)y); gpu_put32(request + 32, (u32)width); gpu_put32(request + 36, (u32)height); gpu_put32(request + 40, 1U);
+	render_stats_gpu_flush();
 	return gpu_submit(48U, 24U);
 }
 

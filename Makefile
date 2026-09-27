@@ -57,6 +57,8 @@ INPUT_TEST ?= 0
 UTF8_TEST ?= 0
 COMPOSITOR_TEST ?= 0
 WINDOW_TEST ?= 0
+RENDER_BATCHING ?= 1
+RENDER_BATCHING_TEST ?= 0
 TERMINAL_APP_TEST ?= 0
 TERMINAL_FAULT_TEST ?= 0
 TERMINAL_CHECK_TEST ?= 0
@@ -155,6 +157,8 @@ CFLAGS := \
 	-DNIMERA_UTF8_TEST=$(UTF8_TEST) \
 	-DNIMERA_COMPOSITOR_TEST=$(COMPOSITOR_TEST) \
 	-DNIMERA_WINDOW_TEST=$(WINDOW_TEST) \
+	-DNIMERA_RENDER_BATCHING=$(RENDER_BATCHING) \
+	-DNIMERA_RENDER_BATCHING_TEST=$(RENDER_BATCHING_TEST) \
 	-DNIMERA_TERMINAL_APP_TEST=$(TERMINAL_APP_TEST) \
 	-DNIMERA_TERMINAL_FAULT_TEST=$(TERMINAL_FAULT_TEST) \
 	-DNIMERA_TERMINAL_CHECK_TEST=$(TERMINAL_CHECK_TEST) \
@@ -168,7 +172,7 @@ LDFLAGS := \
 	-z max-page-size=0x1000 \
 	-Map=$(MAP)
 
-OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/exception-vector.o $(BUILD_DIR)/halt.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/display.o $(BUILD_DIR)/graphics.o $(BUILD_DIR)/surface.o $(BUILD_DIR)/compositor.o $(BUILD_DIR)/window.o $(BUILD_DIR)/utf8.o $(BUILD_DIR)/terminal.o $(BUILD_DIR)/terminal-fb.o $(BUILD_DIR)/input.o $(BUILD_DIR)/editor.o $(BUILD_DIR)/elf.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/exception.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/irq.o $(BUILD_DIR)/scheduler.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/nimfs.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/arch-irq.o $(BUILD_DIR)/mmu.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/qemu-memory.o $(BUILD_DIR)/qemu-irq.o $(BUILD_DIR)/qemu-virtio.o $(BUILD_DIR)/gic.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/heap.o $(BUILD_DIR)/format.o $(BUILD_DIR)/shell.o $(BUILD_DIR)/block.o $(BUILD_DIR)/uart.o $(BUILD_DIR)/arch-exception.o $(BUILD_DIR)/user-test.o $(BUILD_DIR)/user-syscall.o
+OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/exception-vector.o $(BUILD_DIR)/halt.o $(BUILD_DIR)/main.o $(BUILD_DIR)/console.o $(BUILD_DIR)/display.o $(BUILD_DIR)/graphics.o $(BUILD_DIR)/surface.o $(BUILD_DIR)/compositor.o $(BUILD_DIR)/window.o $(BUILD_DIR)/render-stats.o $(BUILD_DIR)/render-test.o $(BUILD_DIR)/utf8.o $(BUILD_DIR)/terminal.o $(BUILD_DIR)/terminal-fb.o $(BUILD_DIR)/input.o $(BUILD_DIR)/editor.o $(BUILD_DIR)/elf.o $(BUILD_DIR)/panic.o $(BUILD_DIR)/exception.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/irq.o $(BUILD_DIR)/scheduler.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/nimfs.o $(BUILD_DIR)/timer.o $(BUILD_DIR)/arch-timer.o $(BUILD_DIR)/arch-irq.o $(BUILD_DIR)/mmu.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/qemu-memory.o $(BUILD_DIR)/qemu-irq.o $(BUILD_DIR)/qemu-virtio.o $(BUILD_DIR)/gic.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/heap.o $(BUILD_DIR)/format.o $(BUILD_DIR)/shell.o $(BUILD_DIR)/block.o $(BUILD_DIR)/uart.o $(BUILD_DIR)/arch-exception.o $(BUILD_DIR)/user-test.o $(BUILD_DIR)/user-syscall.o
 
 ifneq ($(ELF_INSTALL_TEST),0)
 OBJECTS += $(BUILD_DIR)/hello-payload.o
@@ -188,7 +192,7 @@ OBJECTS += $(BUILD_DIR)/termcheck-payload.o
 endif
 endif
 
-.PHONY: build user-app run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block run-user run-user-protection run-user-terminal run-user-editor-format run-user-editor run-user-editor-test run-user-utils run-elf-format run-elf run-elf-test run-user-files run-commands run-terminal-app run-terminal-app-format run-terminal-fault run-processes run-pipes run-redirection run-jobs run-fb-terminal run-fb-terminal-test run-native-input-test run-utf8-test run-compositor run-windows nimfs-elf-disk-create nimfs-elf-disk-reset disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
+.PHONY: build user-app run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block run-user run-user-protection run-user-terminal run-user-editor-format run-user-editor run-user-editor-test run-user-utils run-elf-format run-elf run-elf-test run-user-files run-commands run-terminal-app run-terminal-app-format run-terminal-fault run-processes run-pipes run-redirection run-jobs run-fb-terminal run-fb-terminal-test run-native-input-test run-utf8-test run-compositor run-windows run-render-batching nimfs-elf-disk-create nimfs-elf-disk-reset disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
 
 build: $(ELF)
 
@@ -234,6 +238,12 @@ $(BUILD_DIR)/terminal.o: kernel/terminal.c include/nimera/compositor.h include/n
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/terminal-fb.o: kernel/terminal_fb.c include/nimera/compositor.h include/nimera/graphics.h include/nimera/heap.h include/nimera/terminal_fb.h include/nimera/utf8.h include/nimera/window.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/render-stats.o: kernel/render_stats.c include/nimera/render_stats.h include/nimera/types.h | $(BUILD_DIR)/.dir
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/render-test.o: kernel/render_test.c include/nimera/compositor.h include/nimera/console.h include/nimera/format.h include/nimera/render_stats.h include/nimera/render_test.h include/nimera/terminal.h include/nimera/timer.h | $(BUILD_DIR)/.dir
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/input.o: kernel/input.c include/nimera/input.h include/nimera/irq.h include/nimera/scheduler.h | $(BUILD_DIR)/.dir
@@ -488,6 +498,11 @@ run-windows: nimfs-elf-disk-create user-app
 	rm -rf build-windows
 	$(MAKE) BUILD_DIR=build-windows FRAMEBUFFER_TERMINAL=1 WINDOW_TEST=1 NIMFS_BOOT=1 ELF_INSTALL_TEST=1 TERMINAL_SIZE_NO_RESPONSE=1 BLOCK_TEST=0 build
 	$(QEMU) -machine $(QEMU_MACHINE) -m $(QEMU_MEMORY) -cpu cortex-a72 -display cocoa -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimera-disk -device virtio-blk-device,drive=nimera-disk -device virtio-gpu-device -device virtio-keyboard-device,display=default -device virtio-tablet-device,display=default -device loader,file=build-windows/baremetal-aarch64.elf,cpu-num=0
+
+run-render-batching: disk-create
+	rm -rf build-render-batching
+	$(MAKE) BUILD_DIR=build-render-batching FRAMEBUFFER_TERMINAL=1 RENDER_BATCHING=1 RENDER_BATCHING_TEST=1 TERMINAL_SIZE_NO_RESPONSE=1 BLOCK_TEST=0 build
+	$(QEMU) -machine $(QEMU_MACHINE) -m $(QEMU_MEMORY) -cpu cortex-a72 -display cocoa -monitor none -serial stdio -global virtio-mmio.force-legacy=false -device virtio-gpu-device -device loader,file=build-render-batching/baremetal-aarch64.elf,cpu-num=0
 
 run-native-input-test:
 	rm -rf build-native-input-test
@@ -934,4 +949,4 @@ run-mounts: nimfs-root-reset nimfs-data-reset
 
 
 clean:
-	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-user build-user-protection build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume build-elf build-elf-format build-elf-test build-elf-test2 build-user-files build-user-format build-shell-user build-shell-terminal build-commands build-command-format build-terminal-app build-terminal-format build-terminal-fault build-user-terminal build-user-terminal-format build-user-editor build-user-editor-format build-user-editor-test build-user-editor-shell build-user-utils build-processes build-pipes build-redirection build-jobs build-jobs-interactive build-graphics build-fb-terminal build-fb-terminal-test build-compositor build-windows build-native-input-test build-utf8-test build-user-app build-user-app-test build-utils build-utils-format
+	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-user build-user-protection build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume build-elf build-elf-format build-elf-test build-elf-test2 build-user-files build-user-format build-shell-user build-shell-terminal build-commands build-command-format build-terminal-app build-terminal-format build-terminal-fault build-user-terminal build-user-terminal-format build-user-editor build-user-editor-format build-user-editor-test build-user-editor-shell build-user-utils build-processes build-pipes build-redirection build-jobs build-jobs-interactive build-graphics build-fb-terminal build-fb-terminal-test build-compositor build-windows build-render-batching build-render-before build-native-input-test build-utf8-test build-user-app build-user-app-test build-utils build-utils-format
