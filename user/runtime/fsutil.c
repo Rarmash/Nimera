@@ -12,6 +12,21 @@ void nimera_print(const char *text)
 	(void)nimera_write(text, nimera_text_length(text));
 }
 
+void nimera_print_u64(unsigned long long value)
+{
+	char digits[21];
+	unsigned int count = 0U;
+	if (value == 0ULL) { nimera_print("0"); return; }
+	while (value != 0ULL) {
+		digits[count++] = (char)('0' + value % 10ULL);
+		value /= 10ULL;
+	}
+	while (count != 0U) {
+		char text[2] = {digits[--count], '\0'};
+		nimera_print(text);
+	}
+}
+
 void nimera_print_error(const char *program, long long error)
 {
 	nimera_print(program);

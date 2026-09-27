@@ -105,3 +105,8 @@ nimera_getcwd:
 	mov x8, #21
 	svc #0
 	ret
+	.global nimera_getpid
+nimera_getpid:
+	mov x8, #22
+	svc #0
+	ret

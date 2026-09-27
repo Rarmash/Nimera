@@ -1,11 +1,13 @@
 #include <nimera/console.h>
 #include <nimera/format.h>
 #include <nimera/irq.h>
+#include <nimera/mmu.h>
 #include <nimera/panic.h>
+#include <nimera/process.h>
 #include <nimera/scheduler.h>
 #include <nimera/timer.h>
 
-#define MAX_THREADS 3U
+#define MAX_THREADS (2U + NIMERA_MAX_PROCESSES)
 #define WORKER_STACK_SIZE (16U * 1024U)
 #define STACK_CANARY 0x4e494d4552415354ULL
 
@@ -16,7 +18,7 @@ static volatile u64 worker_counter;
 static volatile u64 worker_saw_shell_waiting;
 static unsigned char worker_stack[WORKER_STACK_SIZE]
 	__attribute__((aligned(4096)));
-static unsigned char user_kernel_stack[WORKER_STACK_SIZE]
+static unsigned char user_kernel_stacks[NIMERA_MAX_PROCESSES][WORKER_STACK_SIZE]
 	__attribute__((aligned(4096)));
 static unsigned int user_enabled;
 static long long user_exit_status;
@@ -61,6 +63,7 @@ void scheduler_init(void)
 	threads[0].name = "shell";
 	threads[0].run_count = 0ULL;
 	threads[0].switch_count = 0ULL;
+	threads[0].process = (struct process *)0;
 	threads[1].id = 1ULL;
 	threads[1].state = THREAD_READY;
 	threads[1].stack_base = (u64)(unsigned long)worker_stack;
@@ -68,14 +71,27 @@ void scheduler_init(void)
 	threads[1].name = "worker";
 	threads[1].run_count = 0ULL;
 	threads[1].switch_count = 0ULL;
+	threads[1].process = (struct process *)0;
 	threads[2].id = 2ULL;
 	threads[2].state = THREAD_TERMINATED;
 	threads[2].frame = (struct irq_frame *)0;
-	threads[2].stack_base = (u64)(unsigned long)user_kernel_stack;
+	threads[2].stack_base = (u64)(unsigned long)user_kernel_stacks[0];
 	threads[2].stack_top = threads[2].stack_base + WORKER_STACK_SIZE;
 	threads[2].name = "user-test";
 	threads[2].run_count = 0ULL;
 	threads[2].switch_count = 0ULL;
+	threads[2].process = (struct process *)0;
+	for (unsigned int index = 3U; index < MAX_THREADS; ++index) {
+		threads[index].id = index;
+		threads[index].state = THREAD_TERMINATED;
+		threads[index].frame = (struct irq_frame *)0;
+		threads[index].stack_base = (u64)(unsigned long)user_kernel_stacks[index - 2U];
+		threads[index].stack_top = threads[index].stack_base + WORKER_STACK_SIZE;
+		threads[index].name = "user";
+		threads[index].run_count = 0ULL;
+		threads[index].switch_count = 0ULL;
+		threads[index].process = (struct process *)0;
+	}
 	make_worker_frame();
 	current_thread = 0U;
 	context_switches = 0ULL;
@@ -111,6 +127,8 @@ struct irq_frame *scheduler_schedule(struct irq_frame *current_frame)
 	threads[current_thread].frame = current_frame;
 	if (threads[current_thread].state == THREAD_RUNNING) {
 		threads[current_thread].state = THREAD_READY;
+		if (threads[current_thread].process != (struct process *)0)
+			threads[current_thread].process->state = PROCESS_RUNNABLE;
 	}
 	for (offset = 1U; offset <= MAX_THREADS; ++offset) {
 		unsigned int candidate = (current_thread + offset) % MAX_THREADS;
@@ -135,6 +153,10 @@ struct irq_frame *scheduler_schedule(struct irq_frame *current_frame)
 	}
 	current_thread = next;
 	threads[current_thread].state = THREAD_RUNNING;
+	if (threads[current_thread].process != (struct process *)0)
+		threads[current_thread].process->state = PROCESS_RUNNING;
+	mmu_activate_address_space(threads[current_thread].process == (struct process *)0 ?
+		mmu_kernel_address_space() : &threads[current_thread].process->address_space);
 	++threads[current_thread].run_count;
 	++threads[current_thread].switch_count;
 	++context_switches;
@@ -150,12 +172,24 @@ void scheduler_enable_user_task(u64 entry, u64 stack_top, u64 argument)
 void scheduler_enable_user_task_argv(u64 entry, u64 stack_top, u64 argc,
 				     u64 argv)
 {
-	struct irq_frame *frame = (struct irq_frame *)(void *)
-		(user_kernel_stack + WORKER_STACK_SIZE - sizeof(struct irq_frame));
+	scheduler_enable_user_task_for_process((struct process *)0, entry, stack_top,
+		argc, argv);
+}
 
-	if (entry == 0ULL || stack_top == 0ULL || user_enabled != 0U) {
+void scheduler_enable_user_task_for_process(struct process *process, u64 entry,
+				     u64 stack_top, u64 argc, u64 argv)
+{
+	unsigned int slot;
+	struct irq_frame *frame;
+
+	if (entry == 0ULL || stack_top == 0ULL) {
 		panic("invalid user task setup");
 	}
+	for (slot = 2U; slot < MAX_THREADS; ++slot)
+		if (threads[slot].state == THREAD_TERMINATED) break;
+	if (slot == MAX_THREADS) panic("no user thread slot");
+	frame = (struct irq_frame *)(void *)(user_kernel_stacks[slot - 2U] +
+		WORKER_STACK_SIZE - sizeof(struct irq_frame));
 	for (unsigned int index = 0U; index < 31U; ++index) frame->x[index] = 0ULL;
 	frame->x[0] = argc;
 	frame->x[1] = argv;
@@ -165,18 +199,22 @@ void scheduler_enable_user_task_argv(u64 entry, u64 stack_top, u64 argc,
 	frame->sp_el0 = stack_top;
 	frame->esr = 0ULL;
 	frame->far = 0ULL;
-	threads[2].frame = frame;
-	threads[2].state = THREAD_READY;
-	user_enabled = 1U;
+	threads[slot].frame = frame;
+	threads[slot].state = THREAD_READY;
+	threads[slot].process = process;
+	threads[slot].name = process == (struct process *)0 ? "user-test" : "process";
+	if (process != (struct process *)0) process->thread_index = slot;
+	++user_enabled;
 }
 
 struct irq_frame *scheduler_terminate_current(struct irq_frame *frame)
 {
-	if (current_thread != 2U || user_enabled == 0U) {
+	if (current_thread < 2U || user_enabled == 0U) {
 		panic("non-user task attempted termination");
 	}
 	threads[current_thread].frame = frame;
 	threads[current_thread].state = THREAD_TERMINATED;
+	if (threads[0].state == THREAD_WAITING) threads[0].state = THREAD_READY;
 	scheduler_wake_input_waiter();
 	return scheduler_schedule(frame);
 }
@@ -201,12 +239,34 @@ void scheduler_release_user_task(void)
 	if (current_thread == 2U) panic("released running user task");
 	threads[2].frame = (struct irq_frame *)0;
 	threads[2].state = THREAD_TERMINATED;
-	user_enabled = 0U;
+	threads[2].process = (struct process *)0;
+	if (user_enabled != 0U) --user_enabled;
 	if (threads[0].state == THREAD_WAITING) {
 		/* The shell is the foreground owner and waits for the app to exit. */
 		threads[0].state = THREAD_READY;
 	}
 	/* Wake the kernel thread waiting for the user task to finish. */
+	arch_signal_event();
+}
+
+struct process *scheduler_current_process(void)
+{
+	return current_thread < MAX_THREADS ? threads[current_thread].process :
+		(struct process *)0;
+}
+
+void scheduler_release_process(struct process *process)
+{
+	unsigned int slot;
+	if (process == (struct process *)0 || process->thread_index >= MAX_THREADS)
+		return;
+	slot = process->thread_index;
+	if (slot == current_thread) panic("released running process");
+	threads[slot].frame = (struct irq_frame *)0;
+	threads[slot].state = THREAD_TERMINATED;
+	threads[slot].process = (struct process *)0;
+	if (user_enabled != 0U) --user_enabled;
+	if (threads[0].state == THREAD_WAITING) threads[0].state = THREAD_READY;
 	arch_signal_event();
 }
 
@@ -226,7 +286,7 @@ void scheduler_block_input_current(void)
 {
 	/* Caller holds the IRQ-disabled section from uart_getc(). */
 	if (current_thread >= MAX_THREADS ||
-		(current_thread != 0U && current_thread != 2U)) {
+		(current_thread != 0U && current_thread < 2U)) {
 		panic("invalid terminal input waiter");
 	}
 	if (input_waiter != MAX_THREADS && input_waiter != current_thread) {

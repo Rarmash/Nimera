@@ -79,10 +79,10 @@ syscall boundary. The user image is linked into the kernel ELF, but its
 `.user.text`, `.user.rodata`, `.user.data`, and `.user.bss` sections receive
 separate permissions: EL0 text is read-only/executable, while user data and
 the 16 KiB user stack are read-write/non-executable. Kernel code and MMIO
-remain EL1-only. There is still one global page table, no processes, and no ELF
-loader.
+remain EL1-only. The embedded task is still a regression fixture; file-backed
+ELF applications now run as process objects with private address spaces.
 
-There is currently no libc, process table, dynamic linker, filesystem syscall,
+There is currently no libc, dynamic linker, filesystem syscall,
 UART TX interrupt path, or other larger OS subsystem. The current
 RAMFS root is RAM-only and disappears on reboot; the separate NimFS boot mode
 uses the persistent disk image described below. The MMU
@@ -108,11 +108,14 @@ EL0 read-only/executable, RW segments become EL0 read-write/NX, and read-only
 segments become EL0 read-only/NX. The loader zeroes BSS tails and creates a
 16 KiB EL0 stack with one unmapped guard page below it.
 
-Only one dynamically loaded user task exists at a time. After exit or an EL0
-fault, its mappings, code/data pages, stack pages, and temporary image state
-are released. There are still no processes, PIDs, separate address
-spaces, `fork`, `exec`, relocations, PIE, shared libraries, or userspace directory
-operations. The current loader image limit is 64 KiB and the current test
+Each dynamically loaded user task is a process with a PID (PID 0 is invalid),
+its own cwd, handles, dynamic allocations, ELF pages, stack, and AArch64
+TTBR0 address space. Kernel EL1 mappings are cloned into every process, while
+user mappings are private. Processes have no ASIDs and switches conservatively
+flush the EL1 TLB. Exit and EL0 faults first make a process a zombie; cleanup
+and page-table destruction happen only after the scheduler has switched away.
+There is no `fork`, `exec`, relocations, PIE, shared libraries, or background
+shell job control. The current loader image limit is 64 KiB and the current test
 program demonstrates both console output and zero-initialized BSS.
 
 ## Boot flow
@@ -269,8 +272,8 @@ The same saved exception frame is used for EL1 kernel threads and EL0 tasks.
 It contains the general registers, `ELR_EL1`, `SPSR_EL1`, `SP_EL0`, `ESR_EL1`,
 and `FAR_EL1`. A timer IRQ arriving while EL0 executes saves that frame and
 the scheduler can resume another thread before later returning with `eret` to
-EL0. `SYS_exit` marks the static user task terminated; it does not yet reclaim
-resources or create a process.
+EL0. `SYS_exit` marks the current process a zombie and deferred reaping
+releases its resources.
 
 Run the isolated tests with:
 
@@ -378,10 +381,10 @@ simple text-output syscall.
 
 The userspace memory ABI adds `SYS_mem_alloc` and `SYS_mem_free`. Requests are
 rounded to pages in a dedicated virtual range (`0x18000000..0x1f000000`),
-separate from ELF segments and the user stack. The kernel tracks live mappings,
-rejects invalid or double frees, and releases all remaining mappings when the
-single dynamic user task exits. This is a small allocation ABI, not a general
-process address-space manager.
+separate from ELF segments and the user stack. The kernel tracks live mappings
+per process, rejects invalid or double frees, and releases all remaining
+mappings when that process exits. This is a small allocation ABI, not a heap
+or a general virtual-memory manager.
 
 The filesystem ABI adds `SYS_open_directory`, `SYS_read_directory`,
 `SYS_mkdir`, `SYS_unlink`, `SYS_rmdir`, and `SYS_rename`. Directory handles
@@ -390,7 +393,8 @@ type and enumeration offset. `SYS_read_directory` returns one fixed-width
 entry or zero at end-of-directory. The kernel closes all remaining handles on
 EL0 task exit.
 
-`SYS_getcwd` is syscall 21. It copies the bounded, NUL-terminated inherited
+`SYS_getcwd` is syscall 21 and `SYS_getpid` is syscall 22. `getpid` returns
+the current process PID. `SYS_getcwd` copies the bounded, NUL-terminated inherited
 working-directory path into a validated user-writable buffer. The utility
 `write` uses truncate/create plus the existing file-write ABI; `append` uses
 create/append. The kernel's file-write syscall already loops over bounded
@@ -412,6 +416,19 @@ and enter `keytest`. `make run-terminal-fault` runs the cursor-cleanup fault
 test against the same image. These targets use separate build directories and
 do not change the normal RAMFS shell build. `make run-user-terminal` runs the
 non-interactive bad-pointer and coordinate-validation checks.
+
+## Processes and address spaces
+
+`make run-processes` uses an isolated build and a freshly formatted development
+NimFS image. It starts two `/apps/proctest` processes at the same time and a
+fault-isolation child. The test prints different physical backing pages for
+the same user virtual address, lets the timer preempt both processes, confirms
+that an EL0 Data Abort terminates only the faulting child, and then reaps all
+three processes. `/apps/pidtest` demonstrates the `SYS_getpid` ABI.
+
+There is one user thread per process in this milestone. Kernel threads have no
+process and use the kernel address space. TTBR1, ASIDs, SMP, `fork`, `exec`,
+`waitpid`, and a process-creation syscall are intentionally not implemented.
 
 Range I/O is the small common VFS extension used by these syscalls. RAMFS and
 NimFS support reads and writes at a file offset, including partial sectors and
@@ -1091,6 +1108,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `include/nimera/panic.h` — the non-returning `panic()` API.
 - `include/nimera/pmm.h` — the minimal physical page manager API and 4 KiB
   page-size constant.
+- `include/nimera/process.h` — the fixed process object, PID, address-space,
+  and deferred-reap interfaces.
 - `include/nimera/scheduler.h` — the fixed kernel-thread and saved IRQ-frame
   API used by the small preemptive scheduler.
 - `include/nimera/vfs.h` — the small filesystem node, path, directory, read,
@@ -1104,8 +1123,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `kernel/console.c` — delegates the common console API to the current UART
   implementation.
 - `kernel/elf.c` — validates supported ELF64 program headers, builds the
-  bounded argv stack, allocates/maps the one dynamic EL0 task, and owns its
-  fixed userspace file-handle table.
+  bounded argv stack, creates process-owned mappings, and owns per-process
+  cwd, file handles, and dynamic allocations.
 - `kernel/block.c` — registers and dispatches the small generic block-device
   set; it contains no VirtIO register knowledge.
 - `kernel/nimfs.c` — the small versioned whole-disk filesystem and VFS backend;
@@ -1222,6 +1241,9 @@ This is a freestanding program rather than a hosted application:
   scheduler test; `make run-sched` enables it in `build-sched/`.
 - `-DNIMERA_BLOCKING_TEST=0` keeps the normal shell path out of the blocking
   test; `make run-blocking` enables it in `build-blocking/`.
+- `-DNIMERA_PROCESS_TEST=0` keeps the multi-process harness out of the normal
+  image; `make run-processes` enables it in the isolated `build-processes/`
+  build and formats its explicit development image.
 - `-DNIMERA_COMMAND_TEST=0` keeps external-command resolution out of the
   normal shell boot; `make run-commands` enables it in `build-commands/`.
 - `-DNIMERA_VFS_TEST=0` keeps the normal shell path out of the VFS test;

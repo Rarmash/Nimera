@@ -30,5 +30,6 @@ int nimera_rmdir(const char *path, unsigned long long length);
 int nimera_rename(const char *source, unsigned long long source_length,
 	const char *destination, unsigned long long destination_length);
 long long nimera_getcwd(char *buffer, unsigned long long capacity);
+long long nimera_getpid(void);
 
 #endif

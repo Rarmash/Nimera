@@ -13,6 +13,7 @@
 #include <nimera/nimfs.h>
 #include <nimera/panic.h>
 #include <nimera/pmm.h>
+#include <nimera/process.h>
 #include <nimera/shell.h>
 #include <nimera/scheduler.h>
 #include <nimera/terminal.h>
@@ -28,6 +29,7 @@ volatile u64 user_protection_kernel_data = 0x123456789abcdef0ULL;
 #endif
 
 #if NIMERA_NIMFS_BOOT
+#if !NIMERA_NIMFS_FORMAT_TEST
 static unsigned int volume_name_length(const char *text)
 {
 	unsigned int n = 0U;
@@ -114,6 +116,7 @@ static void nimfs_automount_secondary(void)
 			": no supported filesystem\r\n" : ": corrupt NimFS\r\n");
 	}
 }
+#endif
 
 #if NIMERA_NIMFS_MOUNT_TEST
 static void nimfs_mount_test(void)
@@ -869,6 +872,49 @@ static void user_utils_test(void)
 }
 #endif
 
+#if NIMERA_PROCESS_TEST
+static void process_test_run(void)
+{
+	static const struct elf_argument argument = {"/apps/proctest", 14ULL};
+	struct process *first;
+	struct process *second;
+	struct process *fault;
+	enum elf_result result;
+	result = elf_load_user(vfs_root(), argument.text, &argument, 1U);
+	if (result != ELF_OK) panic(elf_error_string(result));
+	first = process_last_spawned();
+	result = elf_load_user(vfs_root(), argument.text, &argument, 1U);
+	if (result != ELF_OK) panic(elf_error_string(result));
+	second = process_last_spawned();
+	{
+		static const struct elf_argument fault_argument = {"/apps/procfault", 16ULL};
+		result = elf_load_user(vfs_root(), fault_argument.text, &fault_argument, 1U);
+		if (result != ELF_OK) panic(elf_error_string(result));
+		fault = process_last_spawned();
+	}
+	console_write("Process test: spawned PIDs ");
+	format_u64_decimal(first->pid); console_write(", ");
+	format_u64_decimal(second->pid); console_write(" and fault-isolation child\r\n");
+	console_write("Same user VA 0x10000000 physical pages: ");
+	format_u64_hex(process_user_physical(first, 0x10000000ULL)); console_write(" vs ");
+	format_u64_hex(process_user_physical(second, 0x10000000ULL)); console_write("\r\n");
+	console_write("Private .data pages: ");
+	format_u64_hex(process_user_physical(first, 0x10002000ULL)); console_write(" vs ");
+	format_u64_hex(process_user_physical(second, 0x10002000ULL)); console_write("\r\n");
+	console_write("Private stack pages: ");
+	format_u64_hex(process_user_physical(first, 0x1fffc000ULL)); console_write(" vs ");
+	format_u64_hex(process_user_physical(second, 0x1fffc000ULL)); console_write("\r\n");
+	while (!process_is_zombie(first) || !process_is_zombie(second) ||
+	       !process_is_zombie(fault)) arch_wait_for_event();
+	console_write("Process fault isolation: ");
+	console_write(second->exit_status == 0LL ? "survived\r\n" : "failed\r\n");
+	process_reap(first);
+	process_reap(second);
+	process_reap(fault);
+	console_write("Process cleanup: complete\r\nProcess test complete.\r\n");
+}
+#endif
+
 void kernel_main(void)
 {
 	timer_init();
@@ -927,10 +973,13 @@ void kernel_main(void)
 		}
 		format_u64_decimal(device->block_count * device->block_size);
 		console_write(" bytes\r\nSuperblock: initialized\r\nAllocation bitmap: initialized\r\nInode table: initialized\r\nRoot inode: created\r\nInitial tree: created\r\nNimFS format complete.\r\n");
+		#if !NIMERA_PROCESS_TEST
 		return;
+		#endif
 	}
 #endif
 #if NIMERA_NIMFS_BOOT
+	#if !NIMERA_NIMFS_FORMAT_TEST
 	{
 		const struct block_device *device = block_find("disk0");
 		int result = device == (const struct block_device *)0 ?
@@ -940,6 +989,7 @@ void kernel_main(void)
 		}
 		nimfs_automount_secondary();
 	}
+	#endif
 #if NIMERA_NIMFS_MOUNT_TEST
 	nimfs_mount_test();
 	return;
@@ -986,6 +1036,11 @@ irq_enable();
 
 #if NIMERA_USER_UTILS_TEST
 	user_utils_test();
+	return;
+#endif
+
+#if NIMERA_PROCESS_TEST
+	process_test_run();
 	return;
 #endif
 

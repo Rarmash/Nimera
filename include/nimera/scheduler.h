@@ -3,6 +3,8 @@
 
 #include <nimera/types.h>
 
+struct process;
+
 enum thread_state {
 	THREAD_RUNNING,
 	THREAD_READY,
@@ -30,6 +32,7 @@ struct thread {
 	const char *name;
 	u64 run_count;
 	u64 switch_count;
+	struct process *process;
 };
 
 void scheduler_init(void);
@@ -48,7 +51,11 @@ void scheduler_test(void);
 void scheduler_enable_user_task(u64 entry, u64 stack_top, u64 argument);
 void scheduler_enable_user_task_argv(u64 entry, u64 stack_top, u64 argc,
 				     u64 argv);
+void scheduler_enable_user_task_for_process(struct process *process, u64 entry,
+				     u64 stack_top, u64 argc, u64 argv);
 struct irq_frame *scheduler_terminate_current(struct irq_frame *frame);
+struct process *scheduler_current_process(void);
+void scheduler_release_process(struct process *process);
 int scheduler_user_done(void);
 long long scheduler_user_exit_status(void);
 void scheduler_set_user_exit_status(long long status);

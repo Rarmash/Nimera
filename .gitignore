@@ -54,5 +54,6 @@ build-user-editor-test/
 build-user-app-test/
 build-user-editor-shell/
 build-user-utils/
+build-processes/
 build-utils/
 build-utils-format/

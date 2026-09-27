@@ -3,6 +3,7 @@
 #include <nimera/exception.h>
 #include <nimera/format.h>
 #include <nimera/halt.h>
+#include <nimera/process.h>
 #include <nimera/scheduler.h>
 #include <nimera/syscall.h>
 
@@ -71,12 +72,9 @@ struct irq_frame *exception_sync_handle(struct irq_frame *frame)
 		return syscall_handle(frame);
 	}
 	user_fault_report(frame->esr, frame->elr, frame->far);
+	process_mark_exit(process_current(), -1LL);
 	{
 		struct irq_frame *next = scheduler_terminate_current(frame);
-		if (elf_user_task_active() != 0) {
-			elf_user_task_finished();
-			scheduler_release_user_task();
-		}
 		return next;
 	}
 }

@@ -47,6 +47,8 @@ static u64 table_page_count;
 static u64 l3_table_page_count;
 static u64 uart_physical_address;
 static u64 root_table_address;
+static struct mmu_address_space kernel_address_space;
+static const struct mmu_address_space *active_address_space;
 static u64 initial_sctlr_value;
 static unsigned int initialized;
 
@@ -336,9 +338,9 @@ static void validate_section_ranges(const struct memory_map *map)
 	}
 }
 
-static descriptor_t lookup_descriptor(u64 virtual_address)
+static descriptor_t lookup_descriptor_in(u64 root_address, u64 virtual_address)
 {
-	descriptor_t *root = (descriptor_t *)(unsigned long)root_table_address;
+	descriptor_t *root = (descriptor_t *)(unsigned long)root_address;
 	descriptor_t l0 = root[(virtual_address >> 39) & 0x1ffULL];
 	descriptor_t *l1;
 	descriptor_t l1_entry;
@@ -366,6 +368,47 @@ static descriptor_t lookup_descriptor(u64 virtual_address)
 	}
 	l3 = (descriptor_t *)(unsigned long)(l2_entry & ~0xfffULL);
 	return l3[(virtual_address >> 12) & 0x1ffULL];
+}
+
+static descriptor_t lookup_descriptor(u64 virtual_address)
+{
+	return lookup_descriptor_in(active_address_space->root_table, virtual_address);
+}
+
+static descriptor_t *clone_table(const descriptor_t *source, unsigned int level,
+				 struct mmu_address_space *space)
+{
+	descriptor_t *copy = allocate_table();
+
+	++space->table_pages;
+	for (u64 index = 0ULL; index < PAGE_TABLE_ENTRIES; ++index) {
+		descriptor_t entry = source[index];
+		if ((entry & DESC_VALID) == 0ULL) continue;
+		if ((entry & DESC_TABLE) == DESC_TABLE && level < 3U) {
+			descriptor_t *child = clone_table(
+				(const descriptor_t *)(unsigned long)(entry & ~0xfffULL),
+				level + 1U, space);
+			copy[index] = (u64)(unsigned long)child | DESC_VALID | DESC_TABLE;
+		} else {
+			copy[index] = entry;
+		}
+	}
+	return copy;
+}
+
+static void destroy_table(descriptor_t *table, unsigned int level)
+{
+	if (level < 3U) {
+		for (u64 index = 0ULL; index < PAGE_TABLE_ENTRIES; ++index) {
+			descriptor_t entry = table[index];
+			if ((entry & (DESC_VALID | DESC_TABLE)) ==
+				(DESC_VALID | DESC_TABLE)) {
+				destroy_table((descriptor_t *)(unsigned long)(entry & ~0xfffULL),
+					level + 1U);
+			}
+		}
+	}
+	pmm_free_page((u64)(unsigned long)table);
 }
 
 static int descriptor_matches(u64 address, descriptor_t attributes)
@@ -473,6 +516,9 @@ void mmu_init(const struct memory_map *map)
 	l3_table_page_count = 0ULL;
 	root = allocate_table();
 	root_table_address = (u64)(unsigned long)root;
+	kernel_address_space.root_table = root_table_address;
+	kernel_address_space.table_pages = 1ULL;
+	kernel_address_space.l3_table_pages = l3_table_page_count;
 	map_ram(root, map->physical);
 	validate_section_ranges(map);
 	map_permission_range(root, symbol_address(__text_start),
@@ -513,6 +559,7 @@ void mmu_init(const struct memory_map *map)
 	__asm__ volatile("msr sctlr_el1, %0" :: "r"(initial_sctlr | 1ULL)
 					 : "memory");
 	__asm__ volatile("isb" ::: "memory");
+	active_address_space = &kernel_address_space;
 	initialized = 1U;
 }
 
@@ -551,6 +598,13 @@ int mmu_user_writable_range(u64 address, u64 length)
 int mmu_map_user_page(u64 virtual_address, u64 physical_address,
 			 unsigned int permissions)
 {
+	return mmu_map_user_page_in((struct mmu_address_space *)active_address_space,
+			virtual_address, physical_address, permissions);
+}
+
+int mmu_map_user_page_in(struct mmu_address_space *space, u64 virtual_address,
+			 u64 physical_address, unsigned int permissions)
+{
 	descriptor_t attributes;
 
 	if (initialized == 0U || (virtual_address & (NIMERA_PAGE_SIZE - 1ULL)) != 0ULL ||
@@ -563,13 +617,21 @@ int mmu_map_user_page(u64 virtual_address, u64 physical_address,
 		attributes = descriptor_attributes(user_rw_nx(0ULL));
 	else
 		attributes = descriptor_attributes(user_ro_nx(0ULL));
-	map_page_at((descriptor_t *)(unsigned long)root_table_address,
+	if (space == (struct mmu_address_space *)0) return -1;
+	map_page_at((descriptor_t *)(unsigned long)space->root_table,
 			virtual_address, physical_address, attributes);
+	if (space != &kernel_address_space) ++space->table_pages;
 	__asm__ volatile("dsb sy\n\ttlbi vmalle1\n\tdsb sy\n\tisb" ::: "memory");
 	return 0;
 }
 
 int mmu_unmap_user_page(u64 virtual_address)
+{
+	return mmu_unmap_user_page_in((struct mmu_address_space *)active_address_space,
+			virtual_address);
+}
+
+int mmu_unmap_user_page_in(struct mmu_address_space *space, u64 virtual_address)
 {
 	descriptor_t *root;
 	descriptor_t *l2;
@@ -579,7 +641,8 @@ int mmu_unmap_user_page(u64 virtual_address)
 
 	if (initialized == 0U || (virtual_address & (NIMERA_PAGE_SIZE - 1ULL)) != 0ULL)
 		return -1;
-	root = (descriptor_t *)(unsigned long)root_table_address;
+	if (space == (struct mmu_address_space *)0) return -1;
+	root = (descriptor_t *)(unsigned long)space->root_table;
 	l2 = l2_table(root, virtual_address);
 	l2_index = (virtual_address >> 21) & 0x1ffULL;
 	if ((l2[l2_index] & DESC_TABLE) == 0ULL) return -1;
@@ -588,6 +651,107 @@ int mmu_unmap_user_page(u64 virtual_address)
 	l3[l3_index] = 0ULL;
 	__asm__ volatile("dsb sy\n\ttlbi vmalle1\n\tdsb sy\n\tisb" ::: "memory");
 	return 0;
+}
+
+int mmu_clear_user_range_in(struct mmu_address_space *space, u64 start, u64 end)
+{
+	descriptor_t *root;
+	if (space == (struct mmu_address_space *)0 || end < start ||
+		(start & (BLOCK_SIZE - 1ULL)) != 0ULL ||
+		(end & (BLOCK_SIZE - 1ULL)) != 0ULL) return -1;
+	root = (descriptor_t *)(unsigned long)space->root_table;
+	for (u64 address = start; address < end; address += BLOCK_SIZE) {
+		descriptor_t *l2 = l2_table(root, address);
+		u64 index = (address >> 21) & 0x1ffULL;
+		descriptor_t entry = l2[index];
+		descriptor_t *l3;
+		if ((entry & DESC_VALID) == 0ULL) continue;
+		if ((entry & DESC_TABLE) == 0ULL) {
+			l3 = split_block(l2, index);
+			if (space != &kernel_address_space) {
+				++space->table_pages;
+				++space->l3_table_pages;
+			}
+		} else {
+			l3 = (descriptor_t *)(unsigned long)(entry & ~0xfffULL);
+		}
+		for (u64 page = 0ULL; page < PAGE_TABLE_ENTRIES; ++page) l3[page] = 0ULL;
+	}
+	if (active_address_space == space)
+		__asm__ volatile("dsb sy\n\ttlbi vmalle1\n\tdsb sy\n\tisb" ::: "memory");
+	return 0;
+}
+
+const struct mmu_address_space *mmu_kernel_address_space(void)
+{
+	return &kernel_address_space;
+}
+
+int mmu_address_space_create(struct mmu_address_space *space)
+{
+	if (initialized == 0U || space == (struct mmu_address_space *)0) return -1;
+	space->table_pages = 0ULL;
+	space->l3_table_pages = 0ULL;
+	space->root_table = (u64)(unsigned long)clone_table(
+		(const descriptor_t *)(unsigned long)kernel_address_space.root_table,
+		0U, space);
+	return 0;
+}
+
+void mmu_address_space_destroy(struct mmu_address_space *space)
+{
+	if (space == (struct mmu_address_space *)0 || space->root_table == 0ULL ||
+		space->root_table == kernel_address_space.root_table) return;
+	if (active_address_space == space) mmu_activate_address_space(&kernel_address_space);
+	destroy_table((descriptor_t *)(unsigned long)space->root_table, 0U);
+	space->root_table = 0ULL;
+	space->table_pages = 0ULL;
+	space->l3_table_pages = 0ULL;
+}
+
+void mmu_activate_address_space(const struct mmu_address_space *space)
+{
+	if (space == (const struct mmu_address_space *)0 || space->root_table == 0ULL)
+		panic("invalid address space");
+	if (active_address_space == space) return;
+	__asm__ volatile("dsb sy\n\tmsr ttbr0_el1, %0\n\tdsb sy\n\ttlbi vmalle1\n\tdsb sy\n\tisb"
+		:: "r"(space->root_table) : "memory");
+	active_address_space = space;
+}
+
+static int user_range_in(const struct mmu_address_space *space, u64 address,
+			 u64 length, unsigned int writable)
+{
+	u64 end;
+	if (length == 0ULL) return 1;
+	if (address > ~0ULL - length) return 0;
+	end = address + length;
+	for (u64 page = page_align_down(address); page < end; page += NIMERA_PAGE_SIZE) {
+		descriptor_t descriptor = lookup_descriptor_in(space->root_table, page);
+		u64 ap = (descriptor >> 6) & 3ULL;
+		if ((descriptor & DESC_VALID) == 0ULL || (writable != 0U ? ap != 1ULL : (ap != 1ULL && ap != 3ULL))) return 0;
+	}
+	return 1;
+}
+
+int mmu_user_readable_range_in(const struct mmu_address_space *space, u64 address, u64 length)
+{
+	return space != (const struct mmu_address_space *)0 && user_range_in(space, address, length, 0U);
+}
+
+int mmu_user_writable_range_in(const struct mmu_address_space *space, u64 address, u64 length)
+{
+	return space != (const struct mmu_address_space *)0 && user_range_in(space, address, length, 1U);
+}
+
+u64 mmu_user_physical_address(const struct mmu_address_space *space, u64 address)
+{
+	descriptor_t descriptor;
+	if (space == (const struct mmu_address_space *)0) return 0ULL;
+	descriptor = lookup_descriptor_in(space->root_table, address);
+	if ((descriptor & DESC_VALID) == 0ULL) return 0ULL;
+	return (descriptor & 0x0000fffffffff000ULL) +
+		(address & (NIMERA_PAGE_SIZE - 1ULL));
 }
 
 int mmu_map_device_range(u64 start, u64 size)

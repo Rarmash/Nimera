@@ -8,6 +8,7 @@
 #include <nimera/mmu.h>
 #include <nimera/nimfs.h>
 #include <nimera/pmm.h>
+#include <nimera/process.h>
 #include <nimera/scheduler.h>
 #include <nimera/shell.h>
 #include <nimera/terminal.h>
@@ -294,6 +295,8 @@ static void shell_launch(const char *token, const char *rest)
 		console_write("Cannot execute "); console_write(executable); console_write(": ");
 		console_write(elf_error_string(result)); console_write("\r\n"); return;
 	}
+	if (process_last_spawned() != (struct process *)0)
+		process_last_spawned()->terminal_owner = 1U;
 	console_write("Entering EL0...\r\n");
 	scheduler_block_current();
 	while (elf_user_task_active() != 0) arch_wait_for_event();
