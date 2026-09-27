@@ -332,6 +332,32 @@ explicit `run`, invalid executables, directories, and missing commands. This
 is still a small shell path: quoting, environment, pipes, redirection, and
 search outside `/apps` are not implemented.
 
+## Userspace terminal ABI
+
+EL0 applications can use a small logical terminal ABI without knowing about
+PL011 registers or ANSI escape sequences. Syscalls 7–12 provide logical key
+input, terminal size, clear screen, cursor movement, line clearing, and cursor
+visibility. Rows and columns are zero-based; invalid coordinates and invalid
+user pointers are rejected by the kernel. `SYS_write_console` remains the
+simple text-output syscall.
+
+`/apps/keytest` is a standalone freestanding ELF that draws a small full-screen
+test UI, waits for decoded key events, and exits on Ctrl-Q. Only one foreground
+EL0 application may own terminal input. If it blocks waiting for a key, the
+shell and application use the same IRQ-safe single input-waiter path while the
+kernel worker continues to receive timer time. On normal exit or an EL0 fault,
+the kernel restores the cursor before returning to the shell. `/apps/faulttest`
+is a development payload for checking that cleanup path.
+
+The terminal application payloads are installed only by an explicit test build.
+To create a fresh development image containing them, run
+`make run-terminal-app-format` and stop QEMU after the format report. Then
+`make run-terminal-app` boots the direct keytest path, or use the normal shell
+and enter `keytest`. `make run-terminal-fault` runs the cursor-cleanup fault
+test against the same image. These targets use separate build directories and
+do not change the normal RAMFS shell build. `make run-user-terminal` runs the
+non-interactive bad-pointer and coordinate-validation checks.
+
 Range I/O is the small common VFS extension used by these syscalls. RAMFS and
 NimFS support reads and writes at a file offset, including partial sectors and
 file extension without sparse holes. It is not a cache or a general file API;
@@ -995,6 +1021,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `include/nimera/virtio.h` — the QEMU platform VirtIO discovery API.
 - `include/nimera/terminal.h` — logical key events, screen controls, runtime
   geometry, and the 80x25 fallback dimensions.
+- `include/nimera/abi/terminal.h` — fixed-width user-visible key-event and
+  terminal-size ABI structures; it contains no PL011 details.
 - `include/nimera/exception.h` — exception initialization and fatal-report API.
 - `include/nimera/format.h` — minimal unsigned decimal and hexadecimal output
   helpers used where a number must be displayed.
@@ -1028,8 +1056,9 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `kernel/nimfs.c` — the small versioned whole-disk filesystem and VFS backend;
   it contains no VirtIO queue knowledge.
 - `user/runtime/` — the tiny freestanding user entry point and syscall stubs.
-- `user/apps/` — separately linked `hello`, `cat`, and file-syscall test ELF
-  programs; artifacts are kept outside the source tree in `build-user-app/`.
+- `user/apps/` — separately linked `hello`, `cat`, file-syscall, `keytest`, and
+  cursor-fault test ELF programs; artifacts are kept outside the source tree
+  in `build-user-app/`.
 - `kernel/terminal.c` — bounded ANSI key decoding, one-shot geometry
   detection, fallback, and pending input; it does not access PL011 directly.
 - `kernel/exception.c` — prints synchronous-exception diagnostics through the
@@ -1092,7 +1121,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `run-uart-irq`, `run-uart-overflow`, `run-sched`, `run-blocking`, `run-vfs`,
   `run-vfs-write`, `run-terminal`, `run-terminal-size`,
   `run-terminal-size-fallback`, `run-editor`, `run-block`, `disk-create`,
-  `disk-reset`, and `clean`. Test builds use
+  `disk-reset`, `run-terminal-app-format`, `run-terminal-app`,
+  `run-terminal-fault`, `run-user-terminal`, and `clean`. Test builds use
   separate directories so their compile-time paths cannot contaminate `make
   run`.
 - `README.md` — project status, workflow, and design notes.
@@ -1142,6 +1172,13 @@ This is a freestanding program rather than a hosted application:
   normal shell path; `make run-terminal-size` enables it in
   `build-terminal-size/`, while `run-terminal-size-fallback` uses a separate
   build with the response disabled.
+- `-DNIMERA_TERMINAL_CHECK_TEST=0` keeps non-interactive EL0 terminal ABI
+  validation out of the normal image; `make run-user-terminal` enables it in
+  `build-user-terminal/`.
+- `-DNIMERA_TERMINAL_APP_TEST=0` and `-DNIMERA_TERMINAL_FAULT_TEST=0` keep the
+  EL0 terminal test flows out of the normal image; their explicit targets use
+  isolated `build-terminal-*` directories and install the corresponding ELF
+  payloads into the development NimFS image.
 - `-DNIMERA_EDITOR_TEST=0` keeps the automated editor self-test out of the
   normal shell path; `make run-editor` enables it in `build-editor/`.
 - `-DNIMERA_BLOCK_TEST=0` keeps the disk test out of the normal flow;

@@ -3,6 +3,7 @@
 #include <nimera/mmu.h>
 #include <nimera/pmm.h>
 #include <nimera/scheduler.h>
+#include <nimera/terminal.h>
 #include <nimera/user.h>
 #include <nimera/vfs.h>
 
@@ -314,6 +315,7 @@ enum elf_result elf_load_user(struct vfs_node *cwd, const char *path,
 void elf_user_task_finished(void)
 {
 	if (active == 0U) return;
+	terminal_show_cursor();
 	elf_user_close_all();
 	clear_loaded_pages();
 	image = (char *)0;
@@ -443,6 +445,14 @@ int elf_install_test_payload(struct vfs_node *root)
 	extern const unsigned char _binary_build_user_app_cat_elf_end[];
 	extern const unsigned char _binary_build_user_app_filetest_elf_start[];
 	extern const unsigned char _binary_build_user_app_filetest_elf_end[];
+	#if NIMERA_TERMINAL_APP_TEST || NIMERA_TERMINAL_FAULT_TEST || NIMERA_TERMINAL_CHECK_TEST
+	extern const unsigned char _binary_build_user_app_keytest_elf_start[];
+	extern const unsigned char _binary_build_user_app_keytest_elf_end[];
+	extern const unsigned char _binary_build_user_app_faulttest_elf_start[];
+	extern const unsigned char _binary_build_user_app_faulttest_elf_end[];
+	extern const unsigned char _binary_build_user_app_termcheck_elf_start[];
+	extern const unsigned char _binary_build_user_app_termcheck_elf_end[];
+	#endif
 	struct { const char *path; const unsigned char *start; const unsigned char *end; }
 		payloads[] = {
 			{"/apps/hello", _binary_build_user_app_hello_elf_start,
@@ -451,6 +461,14 @@ int elf_install_test_payload(struct vfs_node *root)
 			 _binary_build_user_app_cat_elf_end},
 			{"/apps/filetest", _binary_build_user_app_filetest_elf_start,
 			 _binary_build_user_app_filetest_elf_end}
+			#if NIMERA_TERMINAL_APP_TEST || NIMERA_TERMINAL_FAULT_TEST
+			,{"/apps/keytest", _binary_build_user_app_keytest_elf_start,
+			 _binary_build_user_app_keytest_elf_end},
+			{"/apps/faulttest", _binary_build_user_app_faulttest_elf_start,
+			 _binary_build_user_app_faulttest_elf_end},
+			{"/apps/termcheck", _binary_build_user_app_termcheck_elf_start,
+			 _binary_build_user_app_termcheck_elf_end}
+			#endif
 		};
 	for (unsigned int index = 0U; index < sizeof(payloads) / sizeof(payloads[0]); ++index) {
 		struct vfs_node *node;

@@ -20,6 +20,7 @@ static unsigned char user_kernel_stack[WORKER_STACK_SIZE]
 	__attribute__((aligned(4096)));
 static unsigned int user_enabled;
 static long long user_exit_status;
+static unsigned int input_waiter;
 
 static void worker_entry(void *argument)
 {
@@ -82,6 +83,7 @@ void scheduler_init(void)
 	worker_saw_shell_waiting = 0ULL;
 	user_enabled = 0U;
 	user_exit_status = -1LL;
+	input_waiter = MAX_THREADS;
 }
 
 static int valid_frame(const struct thread *thread, struct irq_frame *frame)
@@ -175,7 +177,7 @@ struct irq_frame *scheduler_terminate_current(struct irq_frame *frame)
 	}
 	threads[current_thread].frame = frame;
 	threads[current_thread].state = THREAD_TERMINATED;
-	scheduler_wake_console_input();
+	scheduler_wake_input_waiter();
 	return scheduler_schedule(frame);
 }
 
@@ -200,6 +202,12 @@ void scheduler_release_user_task(void)
 	threads[2].frame = (struct irq_frame *)0;
 	threads[2].state = THREAD_TERMINATED;
 	user_enabled = 0U;
+	if (threads[0].state == THREAD_WAITING) {
+		/* The shell is the foreground owner and waits for the app to exit. */
+		threads[0].state = THREAD_READY;
+	}
+	/* Wake the kernel thread waiting for the user task to finish. */
+	arch_signal_event();
 }
 
 unsigned int scheduler_thread_count(void)
@@ -209,27 +217,40 @@ unsigned int scheduler_thread_count(void)
 
 void scheduler_block_current(void)
 {
-	if (current_thread != 0U) {
-		panic("non-console thread attempted block");
-	}
-	/* The shell may be transiently READY when a UART IRQ woke it before
-	 * the interrupted instruction resumed. Re-enter WAITING atomically. */
-	threads[0].state = THREAD_WAITING;
+	if (current_thread != 0U) panic("non-console thread attempted block");
+	/* Foreground shell wait is not terminal input ownership. */
+	threads[current_thread].state = THREAD_WAITING;
 }
 
-void scheduler_wake_console_input(void)
+void scheduler_block_input_current(void)
+{
+	/* Caller holds the IRQ-disabled section from uart_getc(). */
+	if (current_thread >= MAX_THREADS ||
+		(current_thread != 0U && current_thread != 2U)) {
+		panic("invalid terminal input waiter");
+	}
+	if (input_waiter != MAX_THREADS && input_waiter != current_thread) {
+		panic("multiple terminal input waiters");
+	}
+	input_waiter = current_thread;
+	/* The check and this transition are performed with IRQs disabled. */
+	threads[current_thread].state = THREAD_WAITING;
+}
+
+void scheduler_wake_input_waiter(void)
 {
 	u64 irq_state = irq_save_disable();
-
-	if (threads[0].state == THREAD_WAITING) {
-		threads[0].state = current_thread == 0U ? THREAD_RUNNING : THREAD_READY;
+	if (input_waiter != MAX_THREADS && threads[input_waiter].state == THREAD_WAITING) {
+		threads[input_waiter].state = input_waiter == current_thread ?
+			THREAD_RUNNING : THREAD_READY;
+		input_waiter = MAX_THREADS;
 	}
 	irq_restore(irq_state);
 }
 
-int scheduler_console_waiting(void)
+int scheduler_input_waiting(void)
 {
-	return threads[0].state == THREAD_WAITING;
+	return input_waiter != MAX_THREADS;
 }
 
 const struct thread *scheduler_thread(unsigned int index)

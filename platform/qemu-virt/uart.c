@@ -87,7 +87,7 @@ char uart_getc(void)
 		}
 
 		/* The check and WAITING transition are atomic against UART IRQs. */
-		scheduler_block_current();
+		scheduler_block_input_current();
 		irq_restore(irq_state);
 		/* WFE only parks an already WAITING thread; it is not the polling
 		 * mechanism. Timer IRQs switch away, and UART IRQs wake this thread. */
@@ -140,8 +140,8 @@ void uart_handle_irq(void)
 	/* ICR acknowledges both sources after the FIFO has been drained. */
 	*uart_register(UART_ICR) = UART_INT_RX | UART_INT_RT;
 	if (received != 0U) {
-		scheduler_wake_console_input();
-		if (scheduler_console_waiting()) {
+		scheduler_wake_input_waiter();
+		if (scheduler_input_waiting()) {
 			/* A received byte must not leave the sole console consumer
 			 * WAITING after the wakeup transition. */
 			panic("console wakeup invariant failed");

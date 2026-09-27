@@ -30,3 +30,33 @@ nimera_close:
 	mov x8, #6
 	svc #0
 	ret
+	.global nimera_read_key
+nimera_read_key:
+	mov x8, #7
+	svc #0
+	ret
+	.global nimera_terminal_size
+nimera_terminal_size:
+	mov x8, #8
+	svc #0
+	ret
+	.global nimera_terminal_clear
+nimera_terminal_clear:
+	mov x8, #9
+	svc #0
+	ret
+	.global nimera_terminal_move_cursor
+nimera_terminal_move_cursor:
+	mov x8, #10
+	svc #0
+	ret
+	.global nimera_terminal_clear_line
+nimera_terminal_clear_line:
+	mov x8, #11
+	svc #0
+	ret
+	.global nimera_terminal_cursor_visible
+nimera_terminal_cursor_visible:
+	mov x8, #12
+	svc #0
+	ret

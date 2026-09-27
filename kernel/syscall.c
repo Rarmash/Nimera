@@ -1,10 +1,13 @@
 #include <nimera/abi/syscall.h>
 #include <nimera/console.h>
 #include <nimera/elf.h>
+#include <nimera/irq.h>
 #include <nimera/mmu.h>
 #include <nimera/scheduler.h>
 #include <nimera/syscall.h>
+#include <nimera/terminal.h>
 #include <nimera/vfs.h>
+#include <nimera/abi/terminal.h>
 
 #define USER_IO_CHUNK 512ULL
 
@@ -86,6 +89,45 @@ static long long syscall_write_file(struct irq_frame *frame)
 	return (long long)total;
 }
 
+static long long syscall_terminal_read_key(struct irq_frame *frame)
+{
+	struct key_event event;
+	struct nimera_key_event user_event;
+
+	if (mmu_user_writable_range(frame->x[0], sizeof(user_event)) == 0)
+		return NIMERA_NERR_INVALID;
+	/* SVC entry masks IRQs. This syscall may sleep until UART RX wakes it. */
+	irq_enable();
+	event = terminal_read_key();
+	user_event.code = (u32)event.code;
+	user_event.ch = (u32)(unsigned char)event.ch;
+	user_event.modifiers = event.ctrl != 0U ? NIMERA_KEY_MOD_CTRL : 0U;
+	user_event.reserved = 0U;
+	if (copy_to_user(frame->x[0], (const char *)(const void *)&user_event,
+			sizeof(user_event)) != 0) return NIMERA_NERR_INVALID;
+	return 0LL;
+}
+
+static long long syscall_terminal_get_size(struct irq_frame *frame)
+{
+	struct nimera_terminal_size size;
+	if (mmu_user_writable_range(frame->x[0], sizeof(size)) == 0)
+		return NIMERA_NERR_INVALID;
+	size.columns = terminal_columns();
+	size.rows = terminal_rows();
+	if (copy_to_user(frame->x[0], (const char *)(const void *)&size,
+			sizeof(size)) != 0) return NIMERA_NERR_INVALID;
+	return 0LL;
+}
+
+static long long syscall_terminal_move_cursor(struct irq_frame *frame)
+{
+	if (frame->x[0] >= (u64)terminal_rows() ||
+		frame->x[1] >= (u64)terminal_columns()) return NIMERA_NERR_INVALID;
+	terminal_move_cursor((unsigned int)frame->x[0], (unsigned int)frame->x[1]);
+	return 0LL;
+}
+
 struct irq_frame *syscall_handle(struct irq_frame *frame)
 {
 	switch (frame->x[8]) {
@@ -108,6 +150,20 @@ struct irq_frame *syscall_handle(struct irq_frame *frame)
 		frame->x[0] = (u64)syscall_write_file(frame); return frame;
 	case NIMERA_SYS_CLOSE:
 		frame->x[0] = (u64)elf_user_close((unsigned int)frame->x[0]); return frame;
+	case NIMERA_SYS_TERM_READ_KEY:
+		frame->x[0] = (u64)syscall_terminal_read_key(frame); return frame;
+	case NIMERA_SYS_TERM_GET_SIZE:
+		frame->x[0] = (u64)syscall_terminal_get_size(frame); return frame;
+	case NIMERA_SYS_TERM_CLEAR:
+		terminal_clear(); frame->x[0] = 0ULL; return frame;
+	case NIMERA_SYS_TERM_MOVE_CURSOR:
+		frame->x[0] = (u64)syscall_terminal_move_cursor(frame); return frame;
+	case NIMERA_SYS_TERM_CLEAR_LINE:
+		terminal_clear_line(); frame->x[0] = 0ULL; return frame;
+	case NIMERA_SYS_TERM_SET_CURSOR_VISIBLE:
+		if (frame->x[0] > 1ULL) frame->x[0] = (u64)NIMERA_NERR_INVALID;
+		else { if (frame->x[0] != 0ULL) terminal_show_cursor(); else terminal_hide_cursor(); frame->x[0] = 0ULL; }
+		return frame;
 	default:
 		frame->x[0] = (u64)NIMERA_NERR_INVALID; return frame;
 	}

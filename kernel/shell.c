@@ -269,6 +269,7 @@ static void shell_launch(const char *token, const char *rest)
 	struct vfs_node *node;
 	unsigned int count = 1U;
 	unsigned int total;
+	u64 worker_before = scheduler_worker_counter();
 	const char *cursor = rest == (const char *)0 ? "" : rest;
 	arguments[0].text = token;
 	arguments[0].length = (u64)shell_string_length(token);
@@ -305,6 +306,10 @@ static void shell_launch(const char *token, const char *rest)
 	console_write("Entering EL0...\r\n");
 	scheduler_block_current();
 	while (elf_user_task_active() != 0) arch_wait_for_event();
+	if (text_equals(token, "keytest") != 0U) {
+		console_write("EL0 terminal blocking: OK\r\nWorker progressed while app waited: ");
+		console_write(scheduler_worker_counter() > worker_before ? "yes\r\n" : "no\r\n");
+	}
 }
 
 static void shell_run_program(const char *argument)

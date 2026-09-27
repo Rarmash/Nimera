@@ -35,8 +35,9 @@ struct thread {
 void scheduler_init(void);
 struct irq_frame *scheduler_schedule(struct irq_frame *current_frame);
 void scheduler_block_current(void);
-void scheduler_wake_console_input(void);
-int scheduler_console_waiting(void);
+void scheduler_block_input_current(void);
+void scheduler_wake_input_waiter(void);
+int scheduler_input_waiting(void);
 unsigned int scheduler_thread_count(void);
 const struct thread *scheduler_thread(unsigned int index);
 u64 scheduler_context_switches(void);

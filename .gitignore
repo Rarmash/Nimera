@@ -40,5 +40,10 @@ build-elf-test2/
 build-user-files/
 build-user-format/
 build-shell-user/
+build-shell-terminal/
 build-commands/
 build-command-format/
+build-terminal-app/
+build-terminal-format/
+build-terminal-fault/
+build-user-terminal/

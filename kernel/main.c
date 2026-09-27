@@ -969,6 +969,24 @@ irq_enable();
 	return;
 #endif
 
+#if NIMERA_TERMINAL_APP_TEST || NIMERA_TERMINAL_FAULT_TEST || NIMERA_TERMINAL_CHECK_TEST
+	{
+		const char *path = NIMERA_TERMINAL_CHECK_TEST ? "/apps/termcheck" :
+			(NIMERA_TERMINAL_FAULT_TEST ? "/apps/faulttest" : "/apps/keytest");
+		struct elf_argument argument = {path, 0ULL};
+		enum elf_result elf_result;
+		argument.length = 0ULL;
+		while (path[argument.length] != '\0') ++argument.length;
+		elf_result = elf_load_user(vfs_root(), path, &argument, 1U);
+		if (elf_result != ELF_OK) panic(elf_error_string(elf_result));
+		console_write("Terminal userspace test: entering "); console_write(path); console_write("\r\n");
+		scheduler_block_current();
+		while (elf_user_task_active() != 0) arch_wait_for_event();
+		console_write("Terminal userspace test: task exited\r\n");
+		return;
+	}
+#endif
+
 #if NIMERA_USER_TEST || NIMERA_USER_PROTECTION_TEST
 	console_write("Nimera userspace test\r\nKernel EL: ");
 	format_u64_decimal(exception_current_el());
