@@ -1400,6 +1400,22 @@ irq_enable();
 	}
 #endif
 
+#if NIMERA_NIMEDIT_GUI_TEST
+	{
+		struct elf_argument arguments[2] = {{"/apps/nimedit", 14ULL},
+			{"/tmp/nimedit.txt", 15ULL}};
+		enum elf_result elf_result;
+		terminal_init();
+		elf_result = elf_load_user(vfs_root(), arguments[0].text, arguments, 2U);
+		if (elf_result != ELF_OK) panic(elf_error_string(elf_result));
+		console_write("NimEdit GUI: entering /apps/nimedit\r\n");
+		scheduler_block_current();
+		while (elf_user_task_active() != 0) arch_wait_for_event();
+		elf_user_task_finished();
+		return;
+	}
+#endif
+
 #if NIMERA_GUI_RUNTIME_TEST
 	{
 		enum elf_result elf_result;

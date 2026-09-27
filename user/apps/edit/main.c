@@ -1,4 +1,4 @@
-#include "editor.h"
+#include <nimera/editor.h>
 
 static unsigned long long text_length(const char *text)
 {
@@ -28,6 +28,7 @@ static void write_number(unsigned long long value)
 static int editor_self_test(void)
 {
 	static const char expected[] = "hello from nimedit!";
+	static const char unicode[] = "Привет";
 	struct user_editor editor;
 	unsigned long long index;
 	int ok = 1;
@@ -42,6 +43,13 @@ static int editor_self_test(void)
 	ok = ok && editor.cursor == 0ULL;
 	user_editor_move_end(&editor);
 	ok = ok && editor.cursor == editor.length;
+	user_editor_destroy(&editor);
+	user_editor_init(&editor);
+	ok = ok && user_editor_set_text(&editor, unicode, sizeof(unicode) - 1ULL) == 0;
+	ok = ok && user_editor_line_column_count(&editor, 0ULL) == 6ULL;
+	user_editor_move_end(&editor); user_editor_backspace(&editor);
+	ok = ok && user_editor_line_column_count(&editor, 0ULL) == 5ULL;
+	ok = ok && editor.dirty != 0U;
 	user_editor_destroy(&editor);
 	write_text("NimEdit userspace model test\r\n");
 	write_text("buffer hello from nimedit!: ");
@@ -79,6 +87,8 @@ static int load_file(struct user_editor *editor, const char *path)
 		editor->length += (unsigned long long)result;
 	}
 	(void)nimera_close((unsigned long long)handle);
+	if (editor->data != (char *)0) editor->data[editor->length] = '\0';
+	editor->dirty = 0U;
 	return 0;
 }
 
@@ -217,13 +227,13 @@ int main(unsigned long long argc, char **argv)
 		}
 		force_quit = 0U;
 		if (event.code == NIMERA_KEY_CHAR && event.modifiers == 0U &&
-			event.ch >= 32U && event.ch <= 126U) result = user_editor_insert(&editor, (char)event.ch);
+			event.ch >= 32U) result = user_editor_insert_codepoint(&editor, event.ch);
 		else if (event.code == NIMERA_KEY_ENTER) result = user_editor_insert(&editor, '\n');
 		else { result = 0; switch (event.code) {
 			case NIMERA_KEY_BACKSPACE: user_editor_backspace(&editor); break;
 			case NIMERA_KEY_DELETE: user_editor_delete(&editor); break;
-			case NIMERA_KEY_LEFT: if (editor.cursor != 0ULL) --editor.cursor; editor.preferred_valid = 0U; break;
-			case NIMERA_KEY_RIGHT: if (editor.cursor < editor.length) ++editor.cursor; editor.preferred_valid = 0U; break;
+			case NIMERA_KEY_LEFT: user_editor_move_left(&editor); break;
+			case NIMERA_KEY_RIGHT: user_editor_move_right(&editor); break;
 			case NIMERA_KEY_UP: user_editor_move_vertical(&editor, -1); break;
 			case NIMERA_KEY_DOWN: user_editor_move_vertical(&editor, 1); break;
 			case NIMERA_KEY_HOME: user_editor_move_home(&editor); break;

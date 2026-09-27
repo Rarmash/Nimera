@@ -70,6 +70,9 @@ The current milestone successfully:
 - provides a standalone EL0 NimEdit 0.2 at `/apps/edit`, using only the public
   terminal, file, and page-allocation syscalls; its editor buffer grows in
   user memory and is released automatically when the task exits.
+- provides the first GUI NimEdit frontend at `/apps/nimedit`; it shares the
+  UTF-8-aware document core with `/apps/edit` and uses the existing userspace
+  Canvas/window runtime.
 - provides EL0 filesystem utilities at `/apps/ls`, `/apps/mkdir`, `/apps/touch`,
   `/apps/rm`, `/apps/rmdir`, `/apps/mv`, `/apps/pwd`, `/apps/write`, and
   `/apps/append`, backed by public directory and mutation syscalls.
@@ -161,6 +164,21 @@ mapping refresh, close handling, and TextField model/editing behavior. The
 isolated `make run-gui-textfield` target runs the same checks with the
 TextField-specific compile-time path; it uses the image prepared by the format
 target.
+
+## NimEdit core and GUI frontend
+
+The reusable editor model is in `user/runtime/editor/`. It owns the UTF-8
+document bytes, cursor/codepoint boundaries, line navigation, editing, and
+dirty state; it has no knowledge of terminals, Canvas, windows, or ANSI
+control sequences. `/apps/edit` is the terminal frontend and `/apps/nimedit`
+is the first GUI frontend, both linked against that same core. The GUI editor
+opens a path supplied in `argv`, renders a scrollable multiline view, supports
+UTF-8 insertion and basic cursor/editing keys, saves with Ctrl-S, and refuses a
+close request while the document is modified.
+
+Use `make run-nimedit-gui-format` once for a fresh NimFS development image,
+stop QEMU after formatting, then use `make run-nimedit-gui`. The editor
+intentionally has no selection, clipboard, undo/redo, or syntax highlighting.
 
 ## Boot flow
 
@@ -1422,9 +1440,12 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 - `user/runtime/gui/` — the userspace Canvas/Painter, font-compatible UTF-8
   text renderer, geometry/damage helpers, Label/Button primitives, and window
   wrapper; it has no kernel GUI implementation dependencies.
+- `user/runtime/editor/` — the shared UI-independent UTF-8 document model used
+  by both NimEdit frontends.
 - `user/apps/` — separately linked `hello`, `cat`, file-syscall, `keytest`,
-  `termcheck`, userspace `edit`, filesystem utility ELF programs, and the
-  `guihello` and `guidemo` shared-framebuffer demos; artifacts are kept outside the source
+  `termcheck`, terminal `edit`, GUI `nimedit`, filesystem utility ELF programs,
+  and the `guihello` and `guidemo` shared-framebuffer demos; artifacts are kept
+  outside the source
   tree in `build-user-app/`.
 - `user/apps/edit/` — the standalone NimEdit model and renderer. It includes
   only the public userspace ABI and no kernel headers.

@@ -37,6 +37,7 @@ USER_EDITOR_SELF_TEST ?= 0
 USER_GUI_TEST ?= 0
 GUI_RUNTIME_TEST ?= 0
 GUI_TEXTFIELD_TEST ?= 0
+NIMEDIT_GUI_TEST ?= 0
 ELF_INSTALL_TEST ?= 0
 ELF_RUN_TEST ?= 0
 BLOCK_TEST ?= 0
@@ -103,6 +104,7 @@ USER_JOBTEST_ELF := $(USER_APP_BUILD_DIR)/jobtest.elf
 USER_GUIHELLO_ELF := $(USER_APP_BUILD_DIR)/guihello.elf
 USER_GUIDEMO_ELF := $(USER_APP_BUILD_DIR)/guidemo.elf
 USER_GUITEST_ELF := $(USER_APP_BUILD_DIR)/guitest.elf
+USER_NIMEDIT_ELF := $(USER_APP_BUILD_DIR)/nimedit.elf
 USER_CC := $(LLVM_PREFIX)/bin/clang
 USER_LD := $(LLD_PREFIX)/bin/ld.lld
 USER_OBJCOPY := $(LLVM_PREFIX)/bin/llvm-objcopy
@@ -172,6 +174,7 @@ CFLAGS := \
 	-DNIMERA_USER_GUI_TEST=$(USER_GUI_TEST) \
 	-DNIMERA_GUI_RUNTIME_TEST=$(GUI_RUNTIME_TEST) \
 	-DNIMERA_GUI_TEXTFIELD_TEST=$(GUI_TEXTFIELD_TEST) \
+	-DNIMERA_NIMEDIT_GUI_TEST=$(NIMEDIT_GUI_TEST) \
 	-DNIMERA_TERMINAL_APP_TEST=$(TERMINAL_APP_TEST) \
 	-DNIMERA_TERMINAL_FAULT_TEST=$(TERMINAL_FAULT_TEST) \
 	-DNIMERA_TERMINAL_CHECK_TEST=$(TERMINAL_CHECK_TEST) \
@@ -199,6 +202,9 @@ OBJECTS += $(BUILD_DIR)/pidtest-payload.o $(BUILD_DIR)/proctest-payload.o $(BUIL
 OBJECTS += $(BUILD_DIR)/upper-payload.o
 OBJECTS += $(BUILD_DIR)/pipetest-payload.o
 OBJECTS += $(BUILD_DIR)/jobtest-payload.o
+ifneq ($(NIMEDIT_GUI_TEST),0)
+OBJECTS += $(BUILD_DIR)/nimedit-payload.o
+endif
 ifneq ($(USER_GUI_TEST),0)
 OBJECTS += $(BUILD_DIR)/guihello-payload.o
 OBJECTS += $(BUILD_DIR)/guidemo-payload.o
@@ -210,7 +216,7 @@ OBJECTS += $(BUILD_DIR)/termcheck-payload.o
 endif
 endif
 
-.PHONY: build user-app run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block run-user run-user-protection run-user-terminal run-user-editor-format run-user-editor run-user-editor-test run-user-utils run-elf-format run-elf run-elf-test run-user-files run-commands run-terminal-app run-terminal-app-format run-terminal-fault run-processes run-pipes run-redirection run-jobs run-fb-terminal run-fb-terminal-test run-native-input-test run-utf8-test run-compositor run-windows run-window-close run-window-resize run-render-batching run-user-gui-format run-user-gui run-gui-runtime-format run-gui-runtime run-gui-textfield run-font nimfs-elf-disk-create nimfs-elf-disk-reset disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
+.PHONY: build user-app run-panic run-nimedit-gui-format run-nimedit-gui run run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block run-user run-user-protection run-user-terminal run-user-editor-format run-user-editor run-user-editor-test run-user-utils run-elf-format run-elf run-elf-test run-user-files run-commands run-terminal-app run-terminal-app-format run-terminal-fault run-processes run-pipes run-redirection run-jobs run-fb-terminal run-fb-terminal-test run-native-input-test run-utf8-test run-compositor run-windows run-window-close run-window-resize run-render-batching run-user-gui-format run-user-gui run-gui-runtime-format run-gui-runtime run-gui-textfield run-font nimfs-elf-disk-create nimfs-elf-disk-reset disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
 
 build: $(ELF)
 
@@ -333,10 +339,13 @@ $(BUILD_DIR)/guidemo-payload.o: $(USER_GUIDEMO_ELF) | $(BUILD_DIR)/.dir
 $(BUILD_DIR)/guitest-payload.o: $(USER_GUITEST_ELF) | $(BUILD_DIR)/.dir
 	$(USER_OBJCOPY) -I binary -O elf64-littleaarch64 -B aarch64 $< $@
 
+$(BUILD_DIR)/nimedit-payload.o: $(USER_NIMEDIT_ELF) | $(BUILD_DIR)/.dir
+	$(USER_OBJCOPY) -I binary -O elf64-littleaarch64 -B aarch64 $< $@
+
 $(BUILD_DIR)/termcheck-payload.o: $(USER_TERMCHECK_ELF) | $(BUILD_DIR)/.dir
 	$(USER_OBJCOPY) -I binary -O elf64-littleaarch64 -B aarch64 $< $@
 
-user-app: $(USER_APP_ELF) $(USER_CAT_ELF) $(USER_FILETEST_ELF) $(USER_KEYTEST_ELF) $(USER_FAULTTEST_ELF) $(USER_TERMCHECK_ELF) $(USER_EDIT_ELF) $(USER_LS_ELF) $(USER_MKDIR_ELF) $(USER_TOUCH_ELF) $(USER_RM_ELF) $(USER_RMDIR_ELF) $(USER_MV_ELF) $(USER_PWD_ELF) $(USER_WRITE_ELF) $(USER_APPEND_ELF) $(USER_PIDTEST_ELF) $(USER_PROCTEST_ELF) $(USER_PROCFAULT_ELF) $(USER_UPPER_ELF) $(USER_PIPETEST_ELF) $(USER_JOBTEST_ELF) $(USER_GUIHELLO_ELF) $(USER_GUIDEMO_ELF) $(USER_GUITEST_ELF)
+user-app: $(USER_APP_ELF) $(USER_CAT_ELF) $(USER_FILETEST_ELF) $(USER_KEYTEST_ELF) $(USER_FAULTTEST_ELF) $(USER_TERMCHECK_ELF) $(USER_EDIT_ELF) $(USER_NIMEDIT_ELF) $(USER_LS_ELF) $(USER_MKDIR_ELF) $(USER_TOUCH_ELF) $(USER_RM_ELF) $(USER_RMDIR_ELF) $(USER_MV_ELF) $(USER_PWD_ELF) $(USER_WRITE_ELF) $(USER_APPEND_ELF) $(USER_PIDTEST_ELF) $(USER_PROCTEST_ELF) $(USER_PROCFAULT_ELF) $(USER_UPPER_ELF) $(USER_PIPETEST_ELF) $(USER_JOBTEST_ELF) $(USER_GUIHELLO_ELF) $(USER_GUIDEMO_ELF) $(USER_GUITEST_ELF)
 
 $(USER_GUIHELLO_ELF): $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/guihello.o $(USER_APP_BUILD_DIR)/syscall.o user/apps/guihello/linker.ld | $(USER_APP_BUILD_DIR)/.dir
 	$(USER_LD) -T user/apps/guihello/linker.ld -m aarch64elf -e _start -z max-page-size=0x1000 -Map=$(USER_APP_BUILD_DIR)/guihello.map -o $@ $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/guihello.o $(USER_APP_BUILD_DIR)/syscall.o
@@ -346,6 +355,9 @@ $(USER_GUIDEMO_ELF): $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/guidemo
 
 $(USER_GUITEST_ELF): $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/guitest.o $(USER_APP_BUILD_DIR)/gui.o $(USER_APP_BUILD_DIR)/font.o $(USER_APP_BUILD_DIR)/syscall.o user/apps/guitest/linker.ld | $(USER_APP_BUILD_DIR)/.dir
 	$(USER_LD) -T user/apps/guitest/linker.ld -m aarch64elf -e _start -z max-page-size=0x1000 -Map=$(USER_APP_BUILD_DIR)/guitest.map -o $@ $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/guitest.o $(USER_APP_BUILD_DIR)/gui.o $(USER_APP_BUILD_DIR)/font.o $(USER_APP_BUILD_DIR)/syscall.o
+
+$(USER_NIMEDIT_ELF): $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/nimedit.o $(USER_APP_BUILD_DIR)/editor-core.o $(USER_APP_BUILD_DIR)/gui.o $(USER_APP_BUILD_DIR)/font.o $(USER_APP_BUILD_DIR)/syscall.o user/apps/nimedit/linker.ld | $(USER_APP_BUILD_DIR)/.dir
+	$(USER_LD) -T user/apps/nimedit/linker.ld -m aarch64elf -e _start -z max-page-size=0x1000 -Map=$(USER_APP_BUILD_DIR)/nimedit.map -o $@ $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/nimedit.o $(USER_APP_BUILD_DIR)/editor-core.o $(USER_APP_BUILD_DIR)/gui.o $(USER_APP_BUILD_DIR)/font.o $(USER_APP_BUILD_DIR)/syscall.o
 
 $(USER_APP_BUILD_DIR)/guihello.o: user/apps/guihello/main.c user/include/nimera/user.h include/nimera/abi/window.h | $(USER_APP_BUILD_DIR)/.dir
 	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -mgeneral-regs-only -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iuser/include -Iinclude -c $< -o $@
@@ -357,6 +369,9 @@ $(USER_APP_BUILD_DIR)/guidemo.o: user/apps/guidemo/main.c user/include/nimera/gu
 
 $(USER_APP_BUILD_DIR)/guitest.o: user/apps/guitest/main.c user/include/nimera/gui.h user/include/nimera/user.h include/nimera/abi/window.h | $(USER_APP_BUILD_DIR)/.dir
 	$(USER_CC) $(USER_GUI_CFLAGS) -c $< -o $@
+
+$(USER_APP_BUILD_DIR)/nimedit.o: user/apps/nimedit/main.c user/include/nimera/editor.h user/include/nimera/gui.h user/include/nimera/user.h include/nimera/abi/window.h | $(USER_APP_BUILD_DIR)/.dir
+	$(USER_CC) $(USER_GUI_CFLAGS) -Iuser/runtime/editor -c $< -o $@
 
 $(USER_APP_BUILD_DIR)/gui.o: user/runtime/gui/gui.c user/include/nimera/gui.h user/include/nimera/user.h include/nimera/abi/window.h | $(USER_APP_BUILD_DIR)/.dir
 	$(USER_CC) $(USER_GUI_CFLAGS) -c $< -o $@
@@ -382,8 +397,8 @@ $(USER_FAULTTEST_ELF): $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/fault
 $(USER_TERMCHECK_ELF): $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/termcheck.o $(USER_APP_BUILD_DIR)/syscall.o user/apps/termcheck/linker.ld | $(USER_APP_BUILD_DIR)/.dir
 	$(USER_LD) -T user/apps/termcheck/linker.ld -m aarch64elf -e _start -z max-page-size=0x1000 -Map=$(USER_APP_BUILD_DIR)/termcheck.map -o $@ $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/termcheck.o $(USER_APP_BUILD_DIR)/syscall.o
 
-$(USER_EDIT_ELF): $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/edit.o $(USER_APP_BUILD_DIR)/edit-model.o $(USER_APP_BUILD_DIR)/syscall.o user/apps/edit/linker.ld | $(USER_APP_BUILD_DIR)/.dir
-	$(USER_LD) -T user/apps/edit/linker.ld -m aarch64elf -e _start -z max-page-size=0x1000 -Map=$(USER_APP_BUILD_DIR)/edit.map -o $@ $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/edit.o $(USER_APP_BUILD_DIR)/edit-model.o $(USER_APP_BUILD_DIR)/syscall.o
+$(USER_EDIT_ELF): $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/edit.o $(USER_APP_BUILD_DIR)/editor-core.o $(USER_APP_BUILD_DIR)/syscall.o user/apps/edit/linker.ld | $(USER_APP_BUILD_DIR)/.dir
+	$(USER_LD) -T user/apps/edit/linker.ld -m aarch64elf -e _start -z max-page-size=0x1000 -Map=$(USER_APP_BUILD_DIR)/edit.map -o $@ $(USER_APP_BUILD_DIR)/start.o $(USER_APP_BUILD_DIR)/edit.o $(USER_APP_BUILD_DIR)/editor-core.o $(USER_APP_BUILD_DIR)/syscall.o
 
 $(USER_APP_BUILD_DIR)/syscall.o: user/runtime/syscall.S include/nimera/abi/syscall.h include/nimera/abi/terminal.h | $(USER_APP_BUILD_DIR)/.dir
 	$(USER_CC) --target=aarch64-none-elf -Iuser/include -Iinclude -c user/runtime/syscall.S -o $@
@@ -409,11 +424,11 @@ $(USER_APP_BUILD_DIR)/faulttest.o: user/apps/faulttest/main.c user/include/nimer
 $(USER_APP_BUILD_DIR)/termcheck.o: user/apps/termcheck/main.c user/include/nimera/user.h include/nimera/abi/terminal.h | $(USER_APP_BUILD_DIR)/.dir
 	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -mgeneral-regs-only -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iuser/include -Iinclude -c $< -o $@
 
-$(USER_APP_BUILD_DIR)/edit.o: user/apps/edit/main.c user/apps/edit/editor.h user/include/nimera/user.h include/nimera/abi/terminal.h | $(USER_APP_BUILD_DIR)/.dir
-	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -mgeneral-regs-only -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iuser/include -Iinclude -Iuser/apps/edit -DNIMERA_USER_EDITOR_SELF_TEST=$(USER_EDITOR_SELF_TEST) -c $< -o $@
+$(USER_APP_BUILD_DIR)/edit.o: user/apps/edit/main.c user/include/nimera/editor.h user/include/nimera/user.h include/nimera/abi/terminal.h | $(USER_APP_BUILD_DIR)/.dir
+	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -mgeneral-regs-only -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iuser/include -Iinclude -DNIMERA_USER_EDITOR_SELF_TEST=$(USER_EDITOR_SELF_TEST) -c $< -o $@
 
-$(USER_APP_BUILD_DIR)/edit-model.o: user/apps/edit/editor.c user/apps/edit/editor.h user/include/nimera/user.h | $(USER_APP_BUILD_DIR)/.dir
-	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -mgeneral-regs-only -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iuser/include -Iinclude -Iuser/apps/edit -c $< -o $@
+$(USER_APP_BUILD_DIR)/editor-core.o: user/runtime/editor/editor.c user/include/nimera/editor.h user/include/nimera/user.h | $(USER_APP_BUILD_DIR)/.dir
+	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -mgeneral-regs-only -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iuser/include -Iinclude -c $< -o $@
 
 $(USER_APP_BUILD_DIR)/fsutil.o: user/runtime/fsutil.c user/runtime/fsutil.h user/include/nimera/user.h | $(USER_APP_BUILD_DIR)/.dir
 	$(USER_CC) --target=aarch64-none-elf -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-builtin -mgeneral-regs-only -fno-stack-protector -fno-pic -fno-pie -fno-asynchronous-unwind-tables -fno-unwind-tables -Iuser/include -Iinclude -Iuser/runtime -c $< -o $@
@@ -588,6 +603,16 @@ run-gui-textfield: nimfs-elf-disk-create user-app
 	rm -rf build-gui-textfield
 	$(MAKE) BUILD_DIR=build-gui-textfield FRAMEBUFFER_TERMINAL=0 NIMFS_BOOT=1 ELF_INSTALL_TEST=1 USER_GUI_TEST=1 GUI_TEXTFIELD_TEST=1 BLOCK_TEST=0 build
 	$(QEMU) -machine $(QEMU_MACHINE) -m $(QEMU_MEMORY) -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimera-disk -device virtio-blk-device,drive=nimera-disk -device loader,file=build-gui-textfield/baremetal-aarch64.elf,cpu-num=0
+
+run-nimedit-gui-format: nimfs-elf-disk-reset user-app
+	rm -rf build-nimedit-gui-format
+	$(MAKE) BUILD_DIR=build-nimedit-gui-format FRAMEBUFFER_TERMINAL=0 NIMFS_FORMAT_TEST=1 NIMFS_BOOT=0 ELF_INSTALL_TEST=1 NIMEDIT_GUI_TEST=1 BLOCK_TEST=0 build
+	$(QEMU) -machine $(QEMU_MACHINE) -m $(QEMU_MEMORY) -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimera-disk -device virtio-blk-device,drive=nimera-disk -device loader,file=build-nimedit-gui-format/baremetal-aarch64.elf,cpu-num=0
+
+run-nimedit-gui: nimfs-elf-disk-create user-app
+	rm -rf build-nimedit-gui
+	$(MAKE) BUILD_DIR=build-nimedit-gui FRAMEBUFFER_TERMINAL=0 NIMFS_BOOT=1 ELF_INSTALL_TEST=1 NIMEDIT_GUI_TEST=1 BLOCK_TEST=0 build
+	$(QEMU) -machine $(QEMU_MACHINE) -m $(QEMU_MEMORY) -cpu cortex-a72 -display cocoa -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimera-disk -device virtio-blk-device,drive=nimera-disk -device virtio-gpu-device -device virtio-keyboard-device,display=default -device virtio-tablet-device,display=default -device loader,file=build-nimedit-gui/baremetal-aarch64.elf,cpu-num=0
 
 run-render-batching: disk-create
 	rm -rf build-render-batching
@@ -1039,4 +1064,4 @@ run-mounts: nimfs-root-reset nimfs-data-reset
 
 
 clean:
-	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-user build-user-protection build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume build-elf build-elf-format build-elf-test build-elf-test2 build-user-files build-user-format build-shell-user build-shell-terminal build-commands build-command-format build-terminal-app build-terminal-format build-terminal-fault build-user-terminal build-user-terminal-format build-user-editor build-user-editor-test build-user-editor-shell build-user-utils build-processes build-pipes build-redirection build-jobs build-jobs-interactive build-graphics build-fb-terminal build-fb-terminal-test build-compositor build-windows build-window-close build-window-resize build-render-batching build-render-before build-native-input-test build-utf8-test build-user-app build-user-app-test build-user-gui build-user-gui-format build-gui-format build-utils build-utils-format build-gui-runtime build-gui-runtime-format build-gui-textfield
+	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-user build-user-protection build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume build-elf build-elf-format build-elf-test build-elf-test2 build-user-files build-user-format build-shell-user build-shell-terminal build-commands build-command-format build-terminal-app build-terminal-format build-terminal-fault build-user-terminal build-user-terminal-format build-user-editor build-user-editor-test build-user-editor-shell build-user-utils build-processes build-pipes build-redirection build-jobs build-jobs-interactive build-graphics build-fb-terminal build-fb-terminal-test build-compositor build-windows build-window-close build-window-resize build-render-batching build-render-before build-native-input-test build-utf8-test build-user-app build-user-app-test build-user-gui build-user-gui-format build-gui-format build-utils build-utils-format build-gui-runtime build-gui-runtime-format build-gui-textfield build-nimedit-gui build-nimedit-gui-format

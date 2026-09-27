@@ -893,6 +893,10 @@ int elf_install_test_payload(struct vfs_node *root)
 	extern const unsigned char _binary_build_user_app_guidemo_elf_start[];
 	extern const unsigned char _binary_build_user_app_guidemo_elf_end[];
 	#endif
+	#if NIMERA_NIMEDIT_GUI_TEST
+	extern const unsigned char _binary_build_user_app_nimedit_elf_start[];
+	extern const unsigned char _binary_build_user_app_nimedit_elf_end[];
+	#endif
 	#if NIMERA_USER_GUI_TEST || NIMERA_GUI_RUNTIME_TEST || NIMERA_GUI_TEXTFIELD_TEST
 	extern const unsigned char _binary_build_user_app_guitest_elf_start[];
 	extern const unsigned char _binary_build_user_app_guitest_elf_end[];
@@ -950,6 +954,10 @@ int elf_install_test_payload(struct vfs_node *root)
 			 _binary_build_user_app_guihello_elf_end},
 			{"/apps/guidemo", _binary_build_user_app_guidemo_elf_start,
 			 _binary_build_user_app_guidemo_elf_end}
+			#endif
+			#if NIMERA_NIMEDIT_GUI_TEST
+			,{"/apps/nimedit", _binary_build_user_app_nimedit_elf_start,
+			 _binary_build_user_app_nimedit_elf_end}
 			#endif
 			#if NIMERA_USER_GUI_TEST || NIMERA_GUI_RUNTIME_TEST || NIMERA_GUI_TEXTFIELD_TEST
 			,{"/apps/guitest", _binary_build_user_app_guitest_elf_start,
