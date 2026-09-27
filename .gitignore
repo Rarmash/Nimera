@@ -59,5 +59,7 @@ build-pipes/
 build-redirection/
 build-jobs/
 build-graphics/
+build-fb-terminal/
+build-fb-terminal-test/
 build-utils/
 build-utils-format/

@@ -1381,6 +1381,9 @@ irq_enable();
 	return;
 #endif
 #if NIMERA_TERMINAL_TEST
+	#if NIMERA_FRAMEBUFFER_TERMINAL
+	terminal_init();
+	#endif
 	terminal_test();
 	return;
 #endif

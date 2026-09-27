@@ -1,7 +1,9 @@
 #include <nimera/console.h>
+#include <nimera/display.h>
 #include <nimera/format.h>
 #include <nimera/irq.h>
 #include <nimera/terminal.h>
+#include <nimera/terminal_fb.h>
 #include <nimera/timer.h>
 
 #define TERMINAL_ESCAPE_TIMEOUT_MS 1000ULL
@@ -184,11 +186,27 @@ static int terminal_collect_geometry_response(void)
 
 void terminal_init(void)
 {
+	console_reset_output();
 	pending_read = 0U;
 	pending_write = 0U;
 	terminal_column_count = TERMINAL_DEFAULT_COLUMNS;
 	terminal_row_count = TERMINAL_DEFAULT_ROWS;
 	terminal_has_geometry = 0U;
+	#if NIMERA_FRAMEBUFFER_TERMINAL
+	if (display_available() != 0 && terminal_fb_init() == 0) {
+		debug_console_write("terminal: framebuffer backend ");
+		debug_format_u64_decimal(terminal_fb_columns());
+		debug_console_putc('x');
+		debug_format_u64_decimal(terminal_fb_rows());
+		debug_console_write("\r\n");
+		console_set_output(terminal_fb_putc, terminal_fb_write);
+		terminal_column_count = terminal_fb_columns();
+		terminal_row_count = terminal_fb_rows();
+		terminal_has_geometry = 1U;
+		return;
+	}
+	debug_console_write("terminal: framebuffer unavailable, using ANSI/UART\r\n");
+	#endif
 	#if NIMERA_TERMINAL_SIZE_NO_RESPONSE
 	return;
 	#endif
@@ -196,6 +214,15 @@ void terminal_init(void)
 	if (terminal_collect_geometry_response() != 0) {
 		terminal_has_geometry = 1U;
 	}
+}
+
+int terminal_framebuffer_active(void)
+{
+	#if NIMERA_FRAMEBUFFER_TERMINAL
+	return terminal_fb_self_test();
+	#else
+	return 0;
+	#endif
 }
 
 unsigned int terminal_geometry_detected(void)
@@ -342,31 +369,53 @@ struct key_event terminal_read_key(void)
 
 void terminal_clear(void)
 {
-	console_write("\033[2J\033[H");
+	if (terminal_framebuffer_active() != 0) terminal_fb_clear();
+	else debug_console_write("\033[2J\033[H");
 }
 
 void terminal_move_cursor(unsigned int row, unsigned int column)
 {
-	console_write("\033[");
-	format_u64_decimal((u64)row + 1ULL);
-	console_putc(';');
-	format_u64_decimal((u64)column + 1ULL);
-	console_putc('H');
+	if (terminal_framebuffer_active() != 0) {
+		terminal_fb_move_cursor(row, column);
+		return;
+	}
+	debug_console_write("\033[");
+	{
+		static const char digits[] = "0123456789";
+		char reversed[20];
+		unsigned int count = 0U;
+		u64 value = (u64)row + 1ULL;
+		do { reversed[count++] = digits[value % 10ULL]; value /= 10ULL; } while (value != 0ULL);
+		while (count != 0U) debug_console_putc(reversed[--count]);
+	}
+	debug_console_putc(';');
+	{
+		static const char digits[] = "0123456789";
+		char reversed[20];
+		unsigned int count = 0U;
+		u64 value = (u64)column + 1ULL;
+		do { reversed[count++] = digits[value % 10ULL]; value /= 10ULL; } while (value != 0ULL);
+		while (count != 0U) debug_console_putc(reversed[--count]);
+	}
+	debug_console_putc('H');
 }
 
 void terminal_clear_line(void)
 {
-	console_write("\033[2K");
+	if (terminal_framebuffer_active() != 0) terminal_fb_clear_line();
+	else debug_console_write("\033[2K");
 }
 
 void terminal_hide_cursor(void)
 {
-	console_write("\033[?25l");
+	if (terminal_framebuffer_active() != 0) terminal_fb_hide_cursor();
+	else debug_console_write("\033[?25l");
 }
 
 void terminal_show_cursor(void)
 {
-	console_write("\033[?25h");
+	if (terminal_framebuffer_active() != 0) terminal_fb_show_cursor();
+	else debug_console_write("\033[?25h");
 }
 
 unsigned int terminal_rows(void)

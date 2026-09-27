@@ -5,10 +5,10 @@
 __attribute__((noreturn))
 void panic(const char *message)
 {
-	console_write("Nimera kernel panic\r\n");
-	console_write("Reason: ");
-	console_write(message);
-	console_write("\r\nSystem halted.\r\n");
+	debug_console_write("Nimera kernel panic\r\n");
+	debug_console_write("Reason: ");
+	debug_console_write(message);
+	debug_console_write("\r\nSystem halted.\r\n");
 
 	cpu_halt();
 }

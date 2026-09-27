@@ -29,6 +29,7 @@ struct key_event {
 struct key_event terminal_read_key(void);
 
 void terminal_init(void);
+int terminal_framebuffer_active(void);
 unsigned int terminal_geometry_detected(void);
 int terminal_geometry_self_test(void);
 

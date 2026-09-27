@@ -516,6 +516,30 @@ terminal, or userspace graphics API. The GPU is optional: ordinary `make run`
 continues to work without it, while `make run-graphics` opens a QEMU graphics
 window and also checks that block and GPU VirtIO devices coexist.
 
+## Framebuffer terminal
+
+`make run-fb-terminal` selects a framebuffer terminal backend for the existing
+logical terminal API. The backend keeps a character-cell grid, renders a small
+bitmap font into the VirtIO-GPU framebuffer, flushes changed cells, and draws a
+software cursor. At the current `1280x800` mode the grid is `80x50` using
+`16x16` cells; the dimensions are derived from the display and font metrics,
+not hardcoded terminal geometry.
+
+The ordinary `make run` path remains the ANSI/PL011 backend. In framebuffer
+mode, shell and EL0 application output uses the same terminal API and ABI as
+before, while UART remains the input path and the debug/panic output path. GPU
+initialization failure falls back to the ANSI terminal. There is no VirtIO
+keyboard, GUI, compositor, or userspace framebuffer mapping yet.
+
+`make run-fb-terminal-test` runs the existing logical terminal test against the
+framebuffer backend. It exercises printable characters, control operations,
+cursor visibility, clearing, and scrolling in an isolated build.
+
+For the shell plus installed EL0 applications, prepare the development NimFS
+image once with `make run-elf-format` (stop QEMU after the format report), then
+use `make run-fb-terminal`. The image is not reformatted by the framebuffer
+terminal target.
+
 `edit <path>` launches the standalone EL0 NimEdit 0.2 from `/apps/edit`. It
 loads or creates a VFS file, uses a growable flat ASCII byte buffer in
 userspace memory, and supports Enter, Backspace, Delete, arrows, Home, End,
@@ -1098,6 +1122,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
 │       ├── console.h
 │       ├── display.h
 │       ├── graphics.h
+│       ├── terminal_fb.h
 │       ├── exception.h
 │       ├── format.h
 │       ├── halt.h
@@ -1209,6 +1234,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   and rectangular flush API.
 - `kernel/graphics.c` — bounds-safe software drawing primitives, tiny bitmap
   text rendering, and the first graphics test pattern.
+- `kernel/terminal_fb.c` — framebuffer terminal cell grid, cursor overlay,
+  scrolling, and cell-sized display flushes.
 - `kernel/elf.c` — validates supported ELF64 program headers, builds the
   bounded argv stack, creates process-owned mappings, and owns per-process
   cwd, file handles, and dynamic allocations.
@@ -1290,7 +1317,8 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `run-user-editor`, `run-user-editor-test`, `run-user-utils`, `run-block`,
   `disk-create`,
   `disk-reset`, `run-terminal-app-format`, `run-terminal-app`,
-  `run-terminal-fault`, `run-user-terminal`, `run-graphics`, and `clean`. Test builds use
+  `run-terminal-fault`, `run-user-terminal`, `run-graphics`,
+  `run-fb-terminal`, `run-fb-terminal-test`, and `clean`. Test builds use
   separate directories so their compile-time paths cannot contaminate `make
   run`; `run-jobs` uses `build-jobs/` for the background-job test.
 - `README.md` — project status, workflow, and design notes.

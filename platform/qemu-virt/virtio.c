@@ -259,7 +259,7 @@ static int gpu_flush(u64 x, u64 y, u64 width, u64 height)
 	request = (u8 *)(unsigned long)gpu.request;
 	if (gpu_command(GPU_CMD_TRANSFER_TO_HOST_2D, 56U, 24U) != 0) return -1;
 	gpu_put32(request + 24, (u32)x); gpu_put32(request + 28, (u32)y); gpu_put32(request + 32, (u32)width); gpu_put32(request + 36, (u32)height);
-	gpu_put64(request + 40, 0ULL); gpu_put32(request + 48, 1U);
+	gpu_put64(request + 40, y * gpu.pitch + x * 4ULL); gpu_put32(request + 48, 1U);
 	if (gpu_submit(56U, 24U) != 0) return -1;
 	if (gpu_command(GPU_CMD_RESOURCE_FLUSH, 48U, 24U) != 0) return -1;
 	gpu_put32(request + 24, (u32)x); gpu_put32(request + 28, (u32)y); gpu_put32(request + 32, (u32)width); gpu_put32(request + 36, (u32)height); gpu_put32(request + 40, 1U);
