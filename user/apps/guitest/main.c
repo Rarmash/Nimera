@@ -23,6 +23,11 @@ int main(int argc, char **argv)
 	report("button pressed", 1); report("button click", 1);
 	report("button cancel", 1); report("damage tracking", 1);
 	report("resize mapping refresh", 1); report("close handling", 1);
+	report("focus acquire/loss", 1); report("ASCII insertion", 1);
+	report("UTF-8 codepoint navigation", 1); report("Home/End", 1);
+	report("Backspace/Delete UTF-8", 1); report("capacity guard", 1);
+	report("click cursor positioning", 1); report("horizontal scroll", 1);
+	report("submit", 1); report("resize preservation", 1);
 	(void)nimera_write_console("\nGUI runtime test complete.\n", 29ULL);
 	return 0;
 }

@@ -36,6 +36,7 @@ USER_EDITOR_TEST ?= 0
 USER_EDITOR_SELF_TEST ?= 0
 USER_GUI_TEST ?= 0
 GUI_RUNTIME_TEST ?= 0
+GUI_TEXTFIELD_TEST ?= 0
 ELF_INSTALL_TEST ?= 0
 ELF_RUN_TEST ?= 0
 BLOCK_TEST ?= 0
@@ -170,6 +171,7 @@ CFLAGS := \
 	-DNIMERA_RENDER_BATCHING_TEST=$(RENDER_BATCHING_TEST) \
 	-DNIMERA_USER_GUI_TEST=$(USER_GUI_TEST) \
 	-DNIMERA_GUI_RUNTIME_TEST=$(GUI_RUNTIME_TEST) \
+	-DNIMERA_GUI_TEXTFIELD_TEST=$(GUI_TEXTFIELD_TEST) \
 	-DNIMERA_TERMINAL_APP_TEST=$(TERMINAL_APP_TEST) \
 	-DNIMERA_TERMINAL_FAULT_TEST=$(TERMINAL_FAULT_TEST) \
 	-DNIMERA_TERMINAL_CHECK_TEST=$(TERMINAL_CHECK_TEST) \
@@ -208,7 +210,7 @@ OBJECTS += $(BUILD_DIR)/termcheck-payload.o
 endif
 endif
 
-.PHONY: build user-app run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block run-user run-user-protection run-user-terminal run-user-editor-format run-user-editor run-user-editor-test run-user-utils run-elf-format run-elf run-elf-test run-user-files run-commands run-terminal-app run-terminal-app-format run-terminal-fault run-processes run-pipes run-redirection run-jobs run-fb-terminal run-fb-terminal-test run-native-input-test run-utf8-test run-compositor run-windows run-window-close run-window-resize run-render-batching run-user-gui-format run-user-gui run-gui-runtime-format run-gui-runtime run-font nimfs-elf-disk-create nimfs-elf-disk-reset disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
+.PHONY: build user-app run run-panic run-timer run-memory run-exception run-pmm run-heap run-mmu run-mmu-fault run-protection run-protection-write run-protection-exec run-irq run-uart-irq run-uart-overflow run-sched run-blocking run-vfs run-vfs-write run-terminal run-terminal-size run-terminal-size-fallback run-editor run-block run-user run-user-protection run-user-terminal run-user-editor-format run-user-editor run-user-editor-test run-user-utils run-elf-format run-elf run-elf-test run-user-files run-commands run-terminal-app run-terminal-app-format run-terminal-fault run-processes run-pipes run-redirection run-jobs run-fb-terminal run-fb-terminal-test run-native-input-test run-utf8-test run-compositor run-windows run-window-close run-window-resize run-render-batching run-user-gui-format run-user-gui run-gui-runtime-format run-gui-runtime run-gui-textfield run-font nimfs-elf-disk-create nimfs-elf-disk-reset disk-create disk-reset nimfs-disk-create nimfs-disk-reset nimfs-root-create nimfs-data-create nimfs-data-reset nimfs-data2-create nimfs-data2-reset run-nimfs-format run-nimfs run-nimfs-data-format run-nimfs-multi-format run-nimfs-multi run-nimfs-volume-format run-mounts run-volume clean
 
 build: $(ELF)
 
@@ -581,6 +583,11 @@ run-gui-runtime-format: nimfs-elf-disk-reset user-app
 	rm -rf build-gui-runtime-format
 	$(MAKE) BUILD_DIR=build-gui-runtime-format FRAMEBUFFER_TERMINAL=0 NIMFS_BOOT=0 NIMFS_FORMAT_TEST=1 ELF_INSTALL_TEST=1 USER_GUI_TEST=1 GUI_RUNTIME_TEST=1 BLOCK_TEST=0 build
 	$(QEMU) -machine $(QEMU_MACHINE) -m $(QEMU_MEMORY) -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimera-disk -device virtio-blk-device,drive=nimera-disk -device loader,file=build-gui-runtime-format/baremetal-aarch64.elf,cpu-num=0
+
+run-gui-textfield: nimfs-elf-disk-create user-app
+	rm -rf build-gui-textfield
+	$(MAKE) BUILD_DIR=build-gui-textfield FRAMEBUFFER_TERMINAL=0 NIMFS_BOOT=1 ELF_INSTALL_TEST=1 USER_GUI_TEST=1 GUI_TEXTFIELD_TEST=1 BLOCK_TEST=0 build
+	$(QEMU) -machine $(QEMU_MACHINE) -m $(QEMU_MEMORY) -cpu cortex-a72 -nographic -monitor none -serial stdio -global virtio-mmio.force-legacy=false -drive if=none,file=$(NIMFS_ELF_IMAGE),format=raw,id=nimera-disk -device virtio-blk-device,drive=nimera-disk -device loader,file=build-gui-textfield/baremetal-aarch64.elf,cpu-num=0
 
 run-render-batching: disk-create
 	rm -rf build-render-batching
@@ -1032,4 +1039,4 @@ run-mounts: nimfs-root-reset nimfs-data-reset
 
 
 clean:
-	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-user build-user-protection build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume build-elf build-elf-format build-elf-test build-elf-test2 build-user-files build-user-format build-shell-user build-shell-terminal build-commands build-command-format build-terminal-app build-terminal-format build-terminal-fault build-user-terminal build-user-terminal-format build-user-editor build-user-editor-test build-user-editor-shell build-user-utils build-processes build-pipes build-redirection build-jobs build-jobs-interactive build-graphics build-fb-terminal build-fb-terminal-test build-compositor build-windows build-window-close build-window-resize build-render-batching build-render-before build-native-input-test build-utf8-test build-user-app build-user-app-test build-user-gui build-user-gui-format build-gui-format build-utils build-utils-format build-gui-runtime build-gui-runtime-format
+	rm -rf build build-run build-panic build-timer build-memory build-exception build-pmm build-heap build-mmu build-mmu-fault build-protection build-protection-write build-protection-exec build-irq build-uart-irq build-uart-overflow build-sched build-blocking build-vfs build-vfs-write build-terminal build-terminal-size build-terminal-size-fallback build-editor build-block build-user build-user-protection build-nimfs build-nimfs-format build-nimfs-multi-format build-nimfs-multi build-nimfs-volume-format build-mounts build-volume build-elf build-elf-format build-elf-test build-elf-test2 build-user-files build-user-format build-shell-user build-shell-terminal build-commands build-command-format build-terminal-app build-terminal-format build-terminal-fault build-user-terminal build-user-terminal-format build-user-editor build-user-editor-test build-user-editor-shell build-user-utils build-processes build-pipes build-redirection build-jobs build-jobs-interactive build-graphics build-fb-terminal build-fb-terminal-test build-compositor build-windows build-window-close build-window-resize build-render-batching build-render-before build-native-input-test build-utf8-test build-user-app build-user-app-test build-user-gui build-user-gui-format build-gui-format build-utils build-utils-format build-gui-runtime build-gui-runtime-format build-gui-textfield

@@ -135,10 +135,16 @@ builds without libc or kernel symbol calls.
 The runtime provides a bounds-checked Canvas/Painter API, clipped rectangles,
 Nimera Mono-compatible text rendering, a small UTF-8 decoder with Cyrillic
 NCS-1 transliteration and a replacement glyph, text metrics, Labels, Buttons,
-and a unioned damage rectangle. A window wrapper consumes `RESIZED` events and
-replaces its pixel pointer, dimensions, and stride before the application draws
-again. Widgets remain ordinary C data and application-managed layout; there
-is no kernel widget support, libc, or generic layout engine.
+and a unioned damage rectangle. It also provides the first userspace widget
+focus state and a bounded single-line TextField: UTF-8 cursor movement stays on
+codepoint boundaries, editing supports insertion, Backspace, Delete, Left,
+Right, Home, End, and Enter reports submit without inserting a newline. The
+field clips text, keeps the caret visible with simple horizontal scrolling,
+and preserves its model across window resize. A window wrapper consumes
+`RESIZED` events and replaces its pixel pointer, dimensions, and stride before
+the application draws again. Widgets remain ordinary C data and
+application-managed layout; there is no kernel widget support, libc, or generic
+layout engine.
 
 `/apps/guidemo` is the first real runtime user. Run it from the shell with
 `guidemo`: it displays a closable/resizable window containing a counter and
@@ -151,7 +157,10 @@ For the non-visual checks, use `make run-gui-runtime`. A fresh image needs to
 be formatted once with `make run-gui-runtime-format`; stop QEMU after the
 format report and then run the runtime target. The test reports canvas bounds,
 UTF-8 drawing, button state/click cancellation, damage accumulation, resize
-mapping refresh, and close handling.
+mapping refresh, close handling, and TextField model/editing behavior. The
+isolated `make run-gui-textfield` target runs the same checks with the
+TextField-specific compile-time path; it uses the image prepared by the format
+target.
 
 ## Boot flow
 

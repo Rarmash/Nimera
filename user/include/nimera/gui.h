@@ -40,6 +40,28 @@ struct nimera_gui_button {
 	unsigned int pressed;
 };
 
+struct nimera_gui_focus {
+	void *focused_widget;
+};
+
+struct nimera_gui_text_field {
+	struct nimera_gui_rect rect;
+	char *text;
+	u64 capacity;
+	u64 length;
+	u64 cursor;
+	unsigned long long scroll_x;
+	unsigned int focused;
+	unsigned int hovered;
+	unsigned int pressed;
+};
+
+enum nimera_gui_text_field_result {
+	NIMERA_GUI_TEXT_NONE = 0,
+	NIMERA_GUI_TEXT_CHANGED = 1,
+	NIMERA_GUI_TEXT_SUBMIT = 2
+};
+
 #define NIMERA_GUI_COLOR_BACKGROUND 0x00101828U
 #define NIMERA_GUI_COLOR_PANEL      0x001b2a3dU
 #define NIMERA_GUI_COLOR_TEXT       0x00ffffffU
@@ -88,6 +110,20 @@ int nimera_gui_button_handle_event(struct nimera_gui_button *button,
 	const struct nimera_window_event *event, unsigned int *clicked);
 void nimera_gui_button_draw(struct nimera_gui_canvas *canvas,
 	const struct nimera_gui_button *button);
+
+void nimera_gui_focus_init(struct nimera_gui_focus *focus);
+void nimera_gui_focus_clear(struct nimera_gui_focus *focus);
+int nimera_gui_text_field_init(struct nimera_gui_text_field *field,
+	struct nimera_gui_rect rect, char *buffer, u64 capacity,
+	const char *initial_text);
+void nimera_gui_text_field_set_focus(struct nimera_gui_text_field *field,
+	struct nimera_gui_focus *focus, unsigned int focused);
+int nimera_gui_text_field_handle_event(struct nimera_gui_text_field *field,
+	struct nimera_gui_focus *focus, const struct nimera_window_event *event,
+	enum nimera_gui_text_field_result *result);
+void nimera_gui_text_field_draw(struct nimera_gui_canvas *canvas,
+	const struct nimera_gui_text_field *field);
+int nimera_gui_text_field_self_test(void);
 
 /* Model and pixel checks used by make run-gui-runtime. */
 int nimera_gui_runtime_self_test(void);
