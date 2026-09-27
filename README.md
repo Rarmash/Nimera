@@ -483,8 +483,22 @@ rolled back on failure. Handle 2 remains connected to the console.
 persistent NimFS output proof.
 
 This is intentionally not a POSIX shell: there is no quoting, escaping, `2>` or
-`>&`, arbitrary file descriptors, heredoc, command substitution, multiple
-pipelines, or background jobs. Operators must be separate tokens.
+`>&`, arbitrary file descriptors, heredoc, command substitution, or multiple
+pipelines. Operators must be separate tokens.
+
+## Background jobs
+
+The shell has a small fixed job table layered over the existing process and
+pipe code. A job is shell metadata, while a process is the actual schedulable
+EL0 task; jobs retain PIDs and exit statuses rather than pointers to process
+objects. A final `&` starts one application or one two-process pipeline in the
+background, returns the prompt immediately, and leaves its stdout/stderr on the
+console. `jobs` reports running, done, or failed entries, and `fg <job-id>`
+gives a running job the terminal and waits for it. Only the rightmost process
+of a foreground pipeline owns terminal-control operations. There are no
+signals, process groups, stopping, or background terminal input yet.
+
+`make run-jobs` runs the isolated job acceptance path with `/apps/jobtest`.
 
 `edit <path>` launches the standalone EL0 NimEdit 0.2 from `/apps/edit`. It
 loads or creates a VFS file, uses a growable flat ASCII byte buffer in
@@ -1042,8 +1056,9 @@ Instruction Abort when branching to a `ret` instruction stored in writable
 The ordinary `make run` starts the built-in kernel shell. Its line buffer is a
 fixed 128-byte array: printable ASCII is echoed into it, Enter executes the
 line, and Backspace removes the previous character. Input beyond the buffer is
-ignored safely. Parsing has no quoting, escaping, piping, redirection, or
-history.
+ignored safely. Parsing has no quoting, escaping, or history; the implemented
+operators are the single pipeline, simple file redirections, and a final `&`
+for background jobs.
 
 `make clean` removes generated objects, the ELF, and the link map:
 
@@ -1255,7 +1270,7 @@ the terminal. Stop it with `Ctrl-A`, then `X`.
   `disk-reset`, `run-terminal-app-format`, `run-terminal-app`,
   `run-terminal-fault`, `run-user-terminal`, and `clean`. Test builds use
   separate directories so their compile-time paths cannot contaminate `make
-  run`.
+  run`; `run-jobs` uses `build-jobs/` for the background-job test.
 - `README.md` — project status, workflow, and design notes.
 
 ## Why the build flags are explicit
@@ -1298,6 +1313,9 @@ This is a freestanding program rather than a hosted application:
   image; `make run-pipes` enables it in the isolated `build-pipes/` build.
 - `-DNIMERA_COMMAND_TEST=0` keeps external-command resolution out of the
   normal shell boot; `make run-commands` enables it in `build-commands/`.
+- `-DNIMERA_JOBS_TEST=0` keeps the deterministic background-job acceptance
+  flow out of the normal shell boot; `make run-jobs` enables it in the
+  isolated `build-jobs/` build.
 - `-DNIMERA_VFS_TEST=0` keeps the normal shell path out of the VFS test;
   `make run-vfs` enables it in `build-vfs/`.
 - `-DNIMERA_VFS_WRITE_TEST=0` keeps the mutable VFS test out of the normal

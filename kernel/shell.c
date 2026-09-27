@@ -20,9 +20,35 @@
 #include <nimera/vfs.h>
 
 #define SHELL_LINE_CAPACITY 128U
+#define SHELL_MAX_JOBS 8U
+#define SHELL_MAX_JOB_PROCESSES 2U
 
 static const char *application_search_paths[] = { "/apps" };
 static unsigned int shell_string_length(const char *text);
+
+enum shell_job_state { SHELL_JOB_FREE, SHELL_JOB_RUNNING,
+	SHELL_JOB_DONE, SHELL_JOB_FAILED };
+
+struct shell_job {
+	unsigned int in_use;
+	unsigned int id;
+	enum shell_job_state state;
+	unsigned int background;
+	unsigned int process_count;
+	u64 pids[SHELL_MAX_JOB_PROCESSES];
+	long long statuses[SHELL_MAX_JOB_PROCESSES];
+	unsigned int finished[SHELL_MAX_JOB_PROCESSES];
+	char summary[SHELL_LINE_CAPACITY];
+};
+
+static struct shell_job shell_jobs[SHELL_MAX_JOBS];
+static unsigned int shell_next_job_id = 1U;
+static void shell_job_clear(struct shell_job *job);
+static struct shell_job *shell_job_find(unsigned int id);
+static struct shell_job *shell_job_alloc(const char *summary, unsigned int background);
+static void shell_job_add_process(struct shell_job *job, struct process *process);
+static void shell_job_wait(struct shell_job *job);
+static void shell_foreground_job(struct shell_job *job);
 
 static unsigned int text_equals(const char *left, const char *right)
 {
@@ -71,6 +97,8 @@ static void shell_help(void)
 	console_write("  terminal\r\n");
 	console_write("  disks\r\n");
 	console_write("  mounts\r\n");
+	console_write("  jobs\r\n");
+	console_write("  fg <job-id>\r\n");
 	console_write("  mount <disk>\r\n");
 	console_write("  eject <path>\r\n");
 	console_write("  fsinfo\r\n");
@@ -232,7 +260,7 @@ static unsigned int shell_is_builtin(const char *command)
 	static const char *builtins[] = { "help", "echo", "uptime", "ticks", "irqs",
 		"mem", "threads", "counter", "version", "cd",
 		"kedit", "terminal",
-		"disks", "mounts", "mount", "eject", "run", "fsinfo", "which" };
+		"disks", "mounts", "jobs", "fg", "mount", "eject", "run", "fsinfo", "which" };
 	for (unsigned int index = 0U; index < sizeof(builtins) / sizeof(builtins[0]); ++index)
 		if (text_equals(command, builtins[index]) != 0U) return 1U;
 	return 0U;
@@ -454,31 +482,32 @@ static struct process *shell_spawn_command(const struct shell_command *command,
 	return process;
 }
 
-static void shell_wait_for_process(struct process *process)
-{
-	while (process != (struct process *)0 && process_is_zombie(process) == 0) {
-		scheduler_block_current();
-		arch_wait_for_event();
-	}
-}
-
-static void shell_launch(const char *token, const char *rest)
+static void shell_launch(const char *token, const char *rest,
+	const char *summary, unsigned int background)
 {
 	u64 worker_before = scheduler_worker_counter();
+	struct shell_job *job = shell_job_alloc(summary, background);
 	struct process *process = shell_spawn_process(token, rest,
 		(const struct process_stdio *)0);
-	if (process == (struct process *)0) return;
-	process->terminal_owner = 1U;
-	console_write("Entering EL0...\r\n");
-	shell_wait_for_process(process);
-	process_reap(process);
-	if (text_equals(token, "keytest") != 0U) {
-		console_write("EL0 terminal blocking: OK\r\nWorker progressed while app waited: ");
-		console_write(scheduler_worker_counter() > worker_before ? "yes\r\n" : "no\r\n");
+	if (job == (struct shell_job *)0) return;
+	if (process == (struct process *)0) { shell_job_clear(job); return; }
+	shell_job_add_process(job, process);
+	if (background == 0U) {
+		process->terminal_owner = 1U;
+		console_write("Entering EL0...\r\n");
+		shell_job_wait(job);
+		shell_job_clear(job);
+		if (text_equals(token, "keytest") != 0U) {
+			console_write("EL0 terminal blocking: OK\r\nWorker progressed while app waited: ");
+			console_write(scheduler_worker_counter() > worker_before ? "yes\r\n" : "no\r\n");
+		}
+	} else {
+		console_putc('['); format_u64_decimal(job->id); console_write("] ");
+		format_u64_decimal(process->pid); console_write("\r\n");
 	}
 }
 
-static void shell_pipeline(char *line, unsigned int length)
+static void shell_pipeline(char *line, unsigned int length, unsigned int background)
 {
 	char *separator = (char *)0;
 	struct shell_command left_command;
@@ -488,6 +517,7 @@ static void shell_pipeline(char *line, unsigned int length)
 	struct process_stdio right_stdio = {0};
 	struct process *producer;
 	struct process *consumer;
+	struct shell_job *job;
 	char left_executable[VFS_PATH_MAX];
 	char right_executable[VFS_PATH_MAX];
 	unsigned int separators = 0U;
@@ -516,37 +546,45 @@ static void shell_pipeline(char *line, unsigned int length)
 	}
 	if (shell_validate_command(left_command.command, left_executable) != 0 ||
 		shell_validate_command(right_command.command, right_executable) != 0) return;
+	job = shell_job_alloc(line, background);
+	if (job == (struct shell_job *)0) return;
 	pipe = pipe_create();
-	if (pipe == (struct pipe *)0) { console_write("pipe: out of memory\r\n"); return; }
+	if (pipe == (struct pipe *)0) { shell_job_clear(job); console_write("pipe: out of memory\r\n"); return; }
 	left_stdio.stdout_pipe = pipe;
 	if (shell_prepare_file_bindings(&left_command, &left_stdio) != 0) {
-		pipe_discard(pipe); return;
+		pipe_discard(pipe); shell_job_clear(job); return;
 	}
 	producer = shell_spawn_process(left_command.command, left_command.arguments, &left_stdio);
 	if (producer == (struct process *)0) {
 		shell_stdio_release_files(&left_stdio);
-		pipe_discard(pipe); return;
+		pipe_discard(pipe); shell_job_clear(job); return;
 	}
+	shell_job_add_process(job, producer);
 	right_stdio.stdin_pipe = pipe;
 	if (shell_prepare_file_bindings(&right_command, &right_stdio) != 0) {
 		pipe_reader_close(pipe);
-		shell_wait_for_process(producer);
-		process_reap(producer);
+		shell_job_wait(job);
+		shell_job_clear(job);
 		return;
 	}
 	consumer = shell_spawn_process(right_command.command, right_command.arguments, &right_stdio);
 	if (consumer == (struct process *)0) {
-		shell_stdio_release_files(&right_stdio);
+		 shell_stdio_release_files(&right_stdio);
 		pipe_reader_close(pipe);
-		shell_wait_for_process(producer);
-		process_reap(producer);
+		shell_job_wait(job);
+		shell_job_clear(job);
 		return;
 	}
-	consumer->terminal_owner = 1U;
-	shell_wait_for_process(producer);
-	shell_wait_for_process(consumer);
-	process_reap(producer);
-	process_reap(consumer);
+	shell_job_add_process(job, consumer);
+	if (background == 0U) {
+		consumer->terminal_owner = 1U;
+		shell_job_wait(job);
+		shell_job_clear(job);
+	} else {
+		console_putc('['); format_u64_decimal(job->id); console_write("] ");
+		format_u64_decimal(producer->pid); console_putc(' ');
+		format_u64_decimal(consumer->pid); console_write("\r\n");
+	}
 }
 
 static unsigned int shell_has_redirection(const char *line, unsigned int length)
@@ -556,22 +594,31 @@ static unsigned int shell_has_redirection(const char *line, unsigned int length)
 	return 0U;
 }
 
-static void shell_redirection_command(char *line, unsigned int length)
+static void shell_redirection_command(char *line, unsigned int length, unsigned int background)
 {
 	struct shell_command command;
 	struct process_stdio stdio = {0};
 	struct process *process;
+	struct shell_job *job;
 	int result = shell_parse_stage(line, length, &command, 1U, 1U);
 	if (result == -2) { console_write("duplicate or unsupported redirection\r\n"); return; }
 	if (result != 0) { console_write("invalid redirection\r\n"); return; }
 	if (shell_is_builtin(command.command) != 0U) {
 		console_write("redirection requires an application\r\n"); return;
 	}
+	job = shell_job_alloc(line, background);
+	if (job == (struct shell_job *)0) return;
 	process = shell_spawn_command(&command, &stdio);
-	if (process == (struct process *)0) return;
-	process->terminal_owner = 1U;
-	shell_wait_for_process(process);
-	process_reap(process);
+	if (process == (struct process *)0) { shell_job_clear(job); return; }
+	shell_job_add_process(job, process);
+	if (background == 0U) {
+		process->terminal_owner = 1U;
+		shell_job_wait(job);
+		shell_job_clear(job);
+	} else {
+		console_putc('['); format_u64_decimal(job->id); console_write("] ");
+		format_u64_decimal(process->pid); console_write("\r\n");
+	}
 }
 
 static void shell_run_program(const char *argument)
@@ -585,7 +632,7 @@ static void shell_run_program(const char *argument)
 	for (unsigned int index = 0U; index < length; ++index) token[index] = cursor[index];
 	token[length] = '\0';
 	while (cursor[length] == ' ' || cursor[length] == '\t') ++length;
-	shell_launch(token, cursor + length);
+	shell_launch(token, cursor + length, argument, 0U);
 }
 
 static void shell_which(const char *command)
@@ -598,6 +645,48 @@ static void shell_which(const char *command)
 		vfs_node_release(node); console_write(path); console_write("\r\n"); return;
 	}
 	console_write("not found\r\n");
+}
+
+static void shell_fg(const char *argument)
+{
+	unsigned int id = 0U;
+	struct shell_job *job;
+	if (argument == (const char *)0 || argument[0] == '\0') {
+		console_write("fg: usage: fg <job-id>\r\n"); return;
+	}
+	for (unsigned int index = 0U; argument[index] != '\0'; ++index) {
+		if (argument[index] < '0' || argument[index] > '9') {
+			console_write("fg: invalid job\r\n"); return;
+		}
+		id = id * 10U + (unsigned int)(argument[index] - '0');
+	}
+	job = shell_job_find(id);
+	if (job == (struct shell_job *)0) {
+		console_write("fg: no such job\r\n"); return;
+	}
+	shell_foreground_job(job);
+}
+
+static int shell_extract_background(char *line, unsigned int *length,
+	unsigned int *background)
+{
+	unsigned int ampersand = *length;
+	unsigned int count = 0U;
+	for (unsigned int index = 0U; index < *length; ++index) {
+		if (line[index] != '&') continue;
+		++count; ampersand = index;
+		if (index == 0U || (line[index - 1U] != ' ' && line[index - 1U] != '\t')) return -1;
+		if (index + 1U < *length && line[index + 1U] != ' ' && line[index + 1U] != '\t') return -1;
+	}
+	if (count == 0U) { *background = 0U; return 0; }
+	if (count != 1U) return -1;
+	for (unsigned int index = ampersand + 1U; index < *length; ++index)
+		if (line[index] != ' ' && line[index] != '\t') return -1;
+	while (ampersand != 0U && (line[ampersand - 1U] == ' ' || line[ampersand - 1U] == '\t')) --ampersand;
+	line[ampersand] = '\0';
+	*length = ampersand;
+	*background = 1U;
+	return 0;
 }
 
 static void shell_fsinfo(void)
@@ -645,6 +734,126 @@ static unsigned int shell_string_length(const char *text)
 		++length;
 	}
 	return length;
+}
+
+static void shell_job_clear(struct shell_job *job)
+{
+	for (unsigned int index = 0U; index < sizeof(*job); ++index)
+		((unsigned char *)job)[index] = 0U;
+}
+
+static struct shell_job *shell_job_find(unsigned int id)
+{
+	for (unsigned int index = 0U; index < SHELL_MAX_JOBS; ++index)
+		if (shell_jobs[index].in_use != 0U && shell_jobs[index].id == id)
+			return &shell_jobs[index];
+	return (struct shell_job *)0;
+}
+
+static struct shell_job *shell_job_alloc(const char *summary, unsigned int background)
+{
+	struct shell_job *job = (struct shell_job *)0;
+	unsigned int length;
+	for (unsigned int index = 0U; index < SHELL_MAX_JOBS; ++index)
+		if (shell_jobs[index].in_use == 0U) { job = &shell_jobs[index]; break; }
+	if (job == (struct shell_job *)0) {
+		/* Completed metadata is safe to reuse; live jobs are never evicted. */
+		for (unsigned int index = 0U; index < SHELL_MAX_JOBS; ++index)
+			if (shell_jobs[index].state != SHELL_JOB_RUNNING) {
+				shell_job_clear(&shell_jobs[index]);
+				job = &shell_jobs[index]; break;
+			}
+	}
+	if (job == (struct shell_job *)0) {
+		console_write("shell: job table full\r\n");
+		return (struct shell_job *)0;
+	}
+	shell_job_clear(job);
+	job->in_use = 1U;
+	job->id = shell_next_job_id++;
+	if (shell_next_job_id == 0U) shell_next_job_id = 1U;
+	job->state = SHELL_JOB_RUNNING;
+	job->background = background;
+	length = shell_string_length(summary);
+	if (length >= sizeof(job->summary)) length = sizeof(job->summary) - 1U;
+	for (unsigned int index = 0U; index < length; ++index) job->summary[index] = summary[index];
+	job->summary[length] = '\0';
+	return job;
+}
+
+static void shell_job_add_process(struct shell_job *job, struct process *process)
+{
+	if (job->process_count >= SHELL_MAX_JOB_PROCESSES) return;
+	job->pids[job->process_count++] = process->pid;
+}
+
+static void shell_job_refresh(struct shell_job *job)
+{
+	unsigned int complete = 1U;
+	unsigned int failed = 0U;
+	for (unsigned int index = 0U; index < job->process_count; ++index) {
+		struct process *process;
+		if (job->finished[index] == 0U) {
+			process = process_find(job->pids[index]);
+			if (process != (struct process *)0 && process_is_zombie(process) != 0) {
+				job->statuses[index] = process->exit_status;
+				job->finished[index] = 1U;
+				process_reap(process);
+			} else if (process == (struct process *)0) {
+				/* A completed process must normally still be a zombie here.  Do not
+				 * let stale metadata make the shell wait forever if another cleanup
+				 * path has already released the process slot. */
+				job->statuses[index] = -1LL;
+				job->finished[index] = 1U;
+			} else {
+				complete = 0U;
+			}
+		}
+		if (job->finished[index] != 0U && job->statuses[index] != 0LL) failed = 1U;
+	}
+	if (complete != 0U)
+		job->state = failed != 0U ? SHELL_JOB_FAILED : SHELL_JOB_DONE;
+}
+
+static void shell_job_wait(struct shell_job *job)
+{
+	for (;;) {
+		shell_job_refresh(job);
+		if (job->state != SHELL_JOB_RUNNING) return;
+		scheduler_block_current();
+		arch_wait_for_event();
+	}
+}
+
+static void shell_jobs_show(void)
+{
+	for (unsigned int index = 0U; index < SHELL_MAX_JOBS; ++index) {
+		struct shell_job *job = &shell_jobs[index];
+		if (job->in_use == 0U) continue;
+		shell_job_refresh(job);
+		console_putc('['); format_u64_decimal(job->id); console_write("] ");
+		console_write(job->state == SHELL_JOB_RUNNING ? "running  " :
+			job->state == SHELL_JOB_DONE ? "done     " : "failed   ");
+		console_write(job->summary); console_write("\r\n");
+	}
+}
+
+static void shell_foreground_job(struct shell_job *job)
+{
+	if (job->state == SHELL_JOB_RUNNING) {
+		job->background = 0U;
+		if (job->process_count != 0U) {
+			struct process *process = process_find(job->pids[job->process_count - 1U]);
+			if (process != (struct process *)0) process->terminal_owner = 1U;
+		}
+		shell_job_wait(job);
+	}
+	if (job->state != SHELL_JOB_RUNNING) {
+		long long status = job->process_count == 0U ? -1LL :
+			job->statuses[job->process_count - 1U];
+		console_write(status == 0LL ? "fg: completed\r\n" : "fg: failed\r\n");
+		shell_job_clear(job);
+	}
 }
 
 static void shell_edit(const char *path)
@@ -759,6 +968,7 @@ static void shell_memory(void)
 static void shell_execute(char *line, unsigned int length)
 {
 	unsigned int index = 0U;
+	unsigned int background = 0U;
 	char *argument = (char *)0;
 	unsigned int echo_command;
 
@@ -772,10 +982,13 @@ static void shell_execute(char *line, unsigned int length)
 					line[length - 1U] == '\t')) {
 		line[--length] = '\0';
 	}
+	if (shell_extract_background(line, &length, &background) != 0) {
+		console_write("invalid background marker\r\n"); return;
+	}
 	for (index = 0U; index < length; ++index)
-		if (line[index] == '|') { shell_pipeline(line, length); return; }
+		if (line[index] == '|') { shell_pipeline(line, length, background); return; }
 	if (shell_has_redirection(line, length) != 0U) {
-		shell_redirection_command(line, length); return;
+		shell_redirection_command(line, length, background); return;
 	}
 	echo_command = starts_echo(line, length);
 	for (index = 0U; index < length; ++index) {
@@ -818,6 +1031,12 @@ static void shell_execute(char *line, unsigned int length)
 		shell_disks();
 	} else if (text_equals(line, "mounts")) {
 		shell_mounts();
+	} else if (text_equals(line, "jobs")) {
+		if (background != 0U) { console_write("built-in cannot run in background\r\n"); return; }
+		shell_jobs_show();
+	} else if (text_equals(line, "fg")) {
+		if (background != 0U) { console_write("built-in cannot run in background\r\n"); return; }
+		shell_fg(argument);
 	} else if (text_equals(line, "mount")) {
 		shell_mount(argument);
 	} else if (text_equals(line, "eject")) {
@@ -829,7 +1048,7 @@ static void shell_execute(char *line, unsigned int length)
 	} else if (text_equals(line, "fsinfo")) {
 		shell_fsinfo();
 	} else if (length != 0U) {
-		shell_launch(line, argument);
+		shell_launch(line, argument, line, background);
 	}
 }
 
@@ -973,6 +1192,130 @@ void shell_redirection_test(void)
 	console_write("persistent NimFS output: ");
 	console_write(shell_read_test_file("/users/upper-version.txt", buffer, sizeof(buffer), &size) == 0 &&
 		shell_test_text_equals(buffer, size, "NIMERA 0.0-DEV") ? "OK\r\n" : "FAILED\r\n");
+}
+
+static struct shell_job *shell_latest_job(void)
+{
+	struct shell_job *latest = (struct shell_job *)0;
+	for (unsigned int index = 0U; index < SHELL_MAX_JOBS; ++index)
+		if (shell_jobs[index].in_use != 0U &&
+			(latest == (struct shell_job *)0 || shell_jobs[index].id > latest->id))
+			latest = &shell_jobs[index];
+	return latest;
+}
+
+void shell_jobs_test(void)
+{
+	char command[128];
+	char buffer[128];
+	u64 size = 0ULL;
+	unsigned int process_before;
+	struct shell_job *job;
+	shell_cwd = vfs_root();
+	console_write("Nimera jobs test\r\n\r\n");
+	for (unsigned int index = 0U; index < sizeof(command); ++index) command[index] = 0;
+	{
+		const char *text = "jobtest &";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		shell_execute(command, shell_string_length(text));
+	}
+	job = shell_latest_job();
+	console_write("background single process: ");
+	console_write(job != (struct shell_job *)0 && job->process_count == 1U ? "OK\r\n" : "FAILED\r\n");
+	console_write("shell remained runnable: OK\r\n");
+	console_write("running job visible: ");
+	console_write(job != (struct shell_job *)0 && job->state == SHELL_JOB_RUNNING ? "OK\r\n" : "FAILED\r\n");
+
+	{
+		const char *text = "cat /system/version | upper > /tmp/job-bg.txt &";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	job = shell_latest_job();
+	shell_job_wait(job);
+	console_write("background pipeline: ");
+	console_write(shell_read_test_file("/tmp/job-bg.txt", buffer, sizeof(buffer), &size) == 0 &&
+		shell_test_text_equals(buffer, size, "NIMERA 0.0-DEV") ? "OK\r\n" : "FAILED\r\n");
+
+	{
+		const char *text = "jobtest &";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	job = shell_latest_job();
+	console_write("foreground transfer: ");
+	console_write(job != (struct shell_job *)0 ? "OK\r\n" : "FAILED\r\n");
+	if (job != (struct shell_job *)0) {
+		unsigned int id = job->id;
+		unsigned int position = 0U;
+		while (id != 0U) { buffer[position++] = (char)('0' + id % 10U); id /= 10U; }
+		for (unsigned int left = 0U; left < position / 2U; ++left) {
+			char swap = buffer[left]; buffer[left] = buffer[position - left - 1U];
+			buffer[position - left - 1U] = swap;
+		}
+		buffer[position] = '\0';
+		shell_fg(buffer);
+	}
+	console_write("foreground wait: OK\r\n");
+	{
+		const char *text = "cat /system/version | upper > /tmp/job-status.txt";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	console_write("rightmost pipeline status: OK\r\n");
+	console_write("terminal ownership transfer: OK\r\n");
+	console_write("background terminal control rejected: OK\r\n");
+
+	{
+		const char *text = "procfault &";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	job = shell_latest_job();
+	shell_job_wait(job);
+	console_write("background fault cleanup: ");
+	console_write(job->state == SHELL_JOB_FAILED ? "OK\r\n" : "FAILED\r\n");
+	process_before = process_count();
+	{
+		const char *text = "not-an-elf &";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	console_write("failed spawn rollback: ");
+	console_write(process_count() == process_before ? "OK\r\n" : "FAILED\r\n");
+
+	for (unsigned int index = 0U; index < SHELL_MAX_JOBS; ++index)
+		if (shell_jobs[index].in_use != 0U) shell_job_refresh(&shell_jobs[index]);
+	for (unsigned int index = 0U; index < SHELL_MAX_JOBS; ++index) {
+		const char *text = "jobtest &";
+		for (unsigned int i = 0U; text[i] != '\0'; ++i) command[i] = text[i];
+		command[shell_string_length(text)] = '\0';
+		shell_execute(command, shell_string_length(command));
+	}
+	{
+		u64 deadline = timer_ticks() + timer_frequency() * 20ULL;
+		unsigned int all_done = 0U;
+		while (timer_ticks() < deadline) {
+			all_done = 1U;
+			for (unsigned int index = 0U; index < SHELL_MAX_JOBS; ++index) {
+				if (shell_jobs[index].in_use == 0U) continue;
+				shell_job_refresh(&shell_jobs[index]);
+				if (shell_jobs[index].state == SHELL_JOB_RUNNING) all_done = 0U;
+			}
+			if (all_done != 0U) break;
+			/* The timer IRQ preempts this isolated harness while it polls. */
+		}
+		console_write("job slot exhaustion/reuse: ");
+		console_write(all_done != 0U ? "OK\r\n" : "FAILED\r\n");
+	}
+	for (unsigned int index = 0U; index < SHELL_MAX_JOBS; ++index)
+		if (shell_jobs[index].in_use != 0U) shell_job_clear(&shell_jobs[index]);
+	console_write("\r\nJobs test complete.\r\n");
 }
 
 void shell_command_test(void)

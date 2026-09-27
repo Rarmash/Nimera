@@ -57,5 +57,6 @@ build-user-utils/
 build-processes/
 build-pipes/
 build-redirection/
+build-jobs/
 build-utils/
 build-utils-format/

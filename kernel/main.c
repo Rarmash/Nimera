@@ -1186,7 +1186,7 @@ void kernel_main(void)
 		}
 		format_u64_decimal(device->block_count * device->block_size);
 		console_write(" bytes\r\nSuperblock: initialized\r\nAllocation bitmap: initialized\r\nInode table: initialized\r\nRoot inode: created\r\nInitial tree: created\r\nNimFS format complete.\r\n");
-		#if !NIMERA_PROCESS_TEST && !NIMERA_PIPE_TEST && !NIMERA_REDIRECTION_TEST
+		#if !NIMERA_PROCESS_TEST && !NIMERA_PIPE_TEST && !NIMERA_REDIRECTION_TEST && !NIMERA_JOBS_TEST
 		return;
 		#endif
 	}
@@ -1298,6 +1298,11 @@ irq_enable();
 
 #if NIMERA_REDIRECTION_TEST
 	shell_redirection_test();
+	return;
+#endif
+
+#if NIMERA_JOBS_TEST
+	shell_jobs_test();
 	return;
 #endif
 

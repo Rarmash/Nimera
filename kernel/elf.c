@@ -882,6 +882,8 @@ int elf_install_test_payload(struct vfs_node *root)
 	extern const unsigned char _binary_build_user_app_upper_elf_end[];
 	extern const unsigned char _binary_build_user_app_pipetest_elf_start[];
 	extern const unsigned char _binary_build_user_app_pipetest_elf_end[];
+	extern const unsigned char _binary_build_user_app_jobtest_elf_start[];
+	extern const unsigned char _binary_build_user_app_jobtest_elf_end[];
 	#if NIMERA_TERMINAL_APP_TEST || NIMERA_TERMINAL_FAULT_TEST || NIMERA_TERMINAL_CHECK_TEST
 	extern const unsigned char _binary_build_user_app_keytest_elf_start[];
 	extern const unsigned char _binary_build_user_app_keytest_elf_end[];
@@ -927,7 +929,9 @@ int elf_install_test_payload(struct vfs_node *root)
 			{"/apps/upper", _binary_build_user_app_upper_elf_start,
 			 _binary_build_user_app_upper_elf_end},
 			{"/apps/pipetest", _binary_build_user_app_pipetest_elf_start,
-			 _binary_build_user_app_pipetest_elf_end}
+			 _binary_build_user_app_pipetest_elf_end},
+			{"/apps/jobtest", _binary_build_user_app_jobtest_elf_start,
+			 _binary_build_user_app_jobtest_elf_end}
 			#if NIMERA_TERMINAL_APP_TEST || NIMERA_TERMINAL_FAULT_TEST || NIMERA_TERMINAL_CHECK_TEST
 			,{"/apps/keytest", _binary_build_user_app_keytest_elf_start,
 			 _binary_build_user_app_keytest_elf_end},
